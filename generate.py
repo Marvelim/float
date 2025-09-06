@@ -134,7 +134,7 @@ class InferenceAgent:
 		nfe: int			= 10,
 		no_crop: bool 		= False,
 		seed: int			= 25,
-		verbose: bool 		= False
+		verbose: bool 		= True
 	) -> str:
 
 		data = self.data_processor.preprocess(ref_path, audio_path, no_crop = no_crop)
