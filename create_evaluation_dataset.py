@@ -108,32 +108,32 @@ class EvaluationDatasetCreator:
         if self.agent is None:
             print("❌ 推理代理未初始化")
             return False
-        
+
         try:
-            # 使用推理代理生成视频
+            # 恢复原始参数来重现问题
             result_path = self.agent.run_inference(
                 res_video_path=str(output_video_path),
                 ref_path=str(ref_image_path),
                 audio_path=str(audio_path),
-                a_cfg_scale=2.0,
+                a_cfg_scale=2.0,  # 恢复原始CFG设置
                 r_cfg_scale=1.0,
                 e_cfg_scale=1.0,
-                emo='S2E',
+                emo='S2E',        # 恢复原始情感标签
                 nfe=10,
-                no_crop=False,  # 使用人脸裁剪
+                no_crop=False,
                 seed=25,
                 verbose=False
             )
-            
+
             return os.path.exists(result_path)
-            
+
         except Exception as e:
             print(f"❌ 生成fake视频失败: {e}")
             return False
     
     def process_actor(self, actor_id):
         """处理单个Actor的数据"""
-        actor_processed_dir = self.processed_dir / "test" / f"Actor_{actor_id:02d}"
+        actor_processed_dir = self.processed_dir / "train" / f"Actor_{actor_id:02d}"
         actor_real_dir = self.real_dir / f"Actor_{actor_id:02d}"
         actor_fake_dir = self.fake_dir / f"Actor_{actor_id:02d}"
         
@@ -216,30 +216,35 @@ class EvaluationDatasetCreator:
         """创建评估数据集"""
         if actor_ids is None:
             actor_ids = [23, 24]  # 默认处理Actor 23和24
-        
+
         print("🎯 开始创建RAVDESS评估数据集")
         print(f"Actor IDs: {actor_ids}")
         print(f"预处理目录: {self.processed_dir}")
         print(f"评估目录: {self.evaluation_dir}")
+        print(f"模型检查点: {self.ckpt_path}")
         print("=" * 60)
-        
+
         # 设置目录结构
         self.setup_evaluation_dirs(actor_ids)
-        
+
         total_success = 0
         total_failed = 0
-        
+
         for actor_id in actor_ids:
             success, failed = self.process_actor(actor_id)
             total_success += success
             total_failed += failed
-        
+
+            # 显示当前进度
+            print(f"✅ Actor_{actor_id:02d} 完成: 成功 {success}, 失败 {failed}")
+
         print(f"\n🎉 评估数据集创建完成!")
-        print(f"成功处理: {total_success} 个视频对")
-        print(f"处理失败: {total_failed} 个视频对")
+        print(f"总计成功处理: {total_success} 个视频对")
+        print(f"总计处理失败: {total_failed} 个视频对")
+        print(f"成功率: {total_success/(total_success+total_failed)*100:.1f}%" if (total_success+total_failed) > 0 else "N/A")
         print(f"📁 Real视频目录: {self.real_dir}")
         print(f"📁 Fake视频目录: {self.fake_dir}")
-        
+
         return total_success, total_failed
 
 
@@ -271,11 +276,11 @@ def main():
     
     # 创建评估数据集
     success_count, failed_count = creator.create_evaluation_dataset(actor_ids)
-    
+
     if failed_count == 0:
         print("✅ 所有视频处理成功")
     else:
-        print(f"⚠️  {failed_count} 个视频处理失败")
+        print(f"⚠️  {failed_count} 个视频处理失败，{success_count} 个视频处理成功")
 
 
 if __name__ == "__main__":

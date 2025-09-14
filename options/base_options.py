@@ -66,6 +66,17 @@ class BaseOptions():
 		parser.add_argument('--n_diff_steps', type=int, default=500, help='number of diffusion steps')
 		parser.add_argument('--diff_schedule', type=str, default='cosine', choices=['linear', 'cosine', 'quadratic', 'sigmoid'])
 		parser.add_argument('--diffusion_mode', type=str, default='sample', choices=['sample', 'noise'])
+
+		parser.add_argument('--data_root', type=str, default='/home/mli374/float/datasets', help='数据根目录')
+		parser.add_argument('--steps', type=int, default=200000, help='训练步数')
+		parser.add_argument('--batch_size', type=int, default=8, help='批次大小')
+		parser.add_argument('--lr', type=float, default=1e-4, help='学习率')
+		parser.add_argument('--num_workers', type=int, default=4, help='DataLoader 工作进程数')
+		parser.add_argument('--mixed_precision', type=str, default='fp16', choices=['no', 'fp16', 'bf16'], help='混合精度')
+		parser.add_argument('--log_step', type=int, default=500)
+		parser.add_argument('--sample_step', type=int, default=2000)
+		parser.add_argument('--save_step', type=int, default=10000)
+		parser.add_argument('--prev_frame_dropout_prob', type=float, default=0.1)
 		return parser
 
 

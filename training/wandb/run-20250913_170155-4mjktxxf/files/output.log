@@ -1,0 +1,23 @@
+Some weights of the model checkpoint at /home/mli374/float/checkpoints/wav2vec2-base-960h were not used when initializing Wav2VecModel: ['lm_head.bias', 'lm_head.weight']
+- This IS expected if you are initializing Wav2VecModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing Wav2VecModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of Wav2VecModel were not initialized from the model checkpoint at /home/mli374/float/checkpoints/wav2vec2-base-960h and are newly initialized: ['wav2vec2.masked_spec_embed']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Traceback (most recent call last):
+  File "train.py", line 385, in <module>
+    main(args)
+  File "train.py", line 158, in main
+    model = FlowMatchingTransformer(opt).to(accelerator.device)
+  File "/home/mli374/float/models/float/FMT.py", line 221, in __init__
+    self.blocks = nn.ModuleList([FMTBlock(self.hidden_size, self.num_heads, mlp_ratio=self.mlp_ratio) for _ in range(self.fmt_depth)])
+  File "/home/mli374/float/models/float/FMT.py", line 221, in <listcomp>
+    self.blocks = nn.ModuleList([FMTBlock(self.hidden_size, self.num_heads, mlp_ratio=self.mlp_ratio) for _ in range(self.fmt_depth)])
+  File "/home/mli374/float/models/float/FMT.py", line 159, in __init__
+    nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/linear.py", line 101, in __init__
+    self.reset_parameters()
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/linear.py", line 107, in reset_parameters
+    init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/init.py", line 412, in kaiming_uniform_
+    return tensor.uniform_(-bound, bound)
+KeyboardInterrupt

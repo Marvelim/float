@@ -1,0 +1,27 @@
+Traceback (most recent call last):
+  File "train.py", line 386, in <module>
+    main(args)
+  File "train.py", line 127, in main
+    dataset = FLOATDataset(
+  File "/home/mli374/float/training/dataset.py", line 44, in __init__
+    self.audio_encoder = AudioEncoder(opt)
+  File "/home/mli374/float/models/float/FLOAT.py", line 188, in __init__
+    self.wav2vec2 = Wav2VecModel.from_pretrained(opt.wav2vec_model_path, local_files_only = True)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/transformers/modeling_utils.py", line 2881, in from_pretrained
+    ) = cls._load_pretrained_model(
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/transformers/modeling_utils.py", line 3182, in _load_pretrained_model
+    error_msgs = _load_state_dict_into_model(model_to_load, state_dict, start_prefix)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/transformers/modeling_utils.py", line 550, in _load_state_dict_into_model
+    load(model_to_load, state_dict, prefix=start_prefix)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/transformers/modeling_utils.py", line 548, in load
+    load(child, state_dict, prefix + name + ".")
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/transformers/modeling_utils.py", line 548, in load
+    load(child, state_dict, prefix + name + ".")
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/transformers/modeling_utils.py", line 548, in load
+    load(child, state_dict, prefix + name + ".")
+  [Previous line repeated 2 more times]
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/transformers/modeling_utils.py", line 544, in load
+    module._load_from_state_dict(*args)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1942, in _load_from_state_dict
+    param.copy_(input_param)
+KeyboardInterrupt

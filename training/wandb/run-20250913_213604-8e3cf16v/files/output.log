@@ -1,0 +1,16 @@
+使用优化版本的数据集 (dataset_test.py)...
+Loading preprocessed data from /tmp/float_cache/preprocessed_train.pkl
+Traceback (most recent call last):
+  File "train.py", line 365, in <module>
+    main(args)
+  File "train.py", line 138, in main
+    train_dataloader = create_dataloader_optimized(
+  File "/home/mli374/float/training/dataset_test.py", line 415, in create_dataloader_optimized
+    dataset = FLOATDatasetOptimized(
+  File "/home/mli374/float/training/dataset_test.py", line 103, in __init__
+    self.preprocessed_data = self._load_cache()
+  File "/home/mli374/float/training/dataset_test.py", line 351, in _load_cache
+    return pickle.load(f)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/storage.py", line 240, in _load_from_bytes
+    def _load_from_bytes(b):
+KeyboardInterrupt

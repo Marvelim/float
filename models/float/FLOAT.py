@@ -81,9 +81,9 @@ class FLOAT(BaseModel):
 		r_s, a = data['r_s'], data['a']
 		B = a.shape[0]
 
-		# make time 
+		# make time
 		time = torch.linspace(0, 1, self.opt.nfe, device=self.opt.rank)
-		
+
 		# encoding audio first with whole audio
 		a = a.to(self.opt.rank)
 		T = math.ceil(a.shape[-1] * self.opt.fps / self.opt.sampling_rate)
@@ -95,6 +95,10 @@ class FLOAT(BaseModel):
 			we = self.emotion_encoder.predict_emotion(a).unsqueeze(1)
 		else:
 			we = F.one_hot(torch.tensor(emo_idx, device = a.device), num_classes = self.opt.dim_e).unsqueeze(0).unsqueeze(0)
+
+		# 确保r_s有正确的维度，与训练时保持一致
+		if r_s.dim() == 2:  # [B, 512] -> [B, 1, 512]
+			r_s = r_s.unsqueeze(1)
 
 		sample = []
 		# sampleing chunk by chunk

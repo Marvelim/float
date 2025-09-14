@@ -16,6 +16,7 @@ import random
 from pathlib import Path
 from models.float.generator import Generator
 from models.float.FLOAT import AudioEncoder, Audio2Emotion
+from transformers import Wav2Vec2FeatureExtractor
 
 class FLOATDataset(Dataset):
     """
@@ -41,9 +42,9 @@ class FLOATDataset(Dataset):
         self.train = train
         self.motion_autoencoder = Generator(size = self.opt.input_size, style_dim = self.opt.dim_w, motion_dim = self.opt.dim_m)
         self.audio_encoder = AudioEncoder(opt)
-        self.emotion_encoder = Audio2Emotion(opt)
-        self.sequence_length = self.opt.wav2vec_sec * self.opt.fps
-        self.prev_frames = self.opt.num_prev_frames
+        self.wav2vec_preprocessor = Wav2Vec2FeatureExtractor.from_pretrained(opt.wav2vec_model_path, local_files_only=True)
+        self.sequence_length = int(self.opt.wav2vec_sec * self.opt.fps)
+        self.prev_frames = int(self.opt.num_prev_frames)
 
         # 情感标签映射
         self.emotion_labels = {
@@ -53,6 +54,8 @@ class FLOATDataset(Dataset):
         
         # 加载数据列表
         self.data_list = self._load_data_list()
+
+
         
     def _load_data_list(self) -> List[Dict[str, Any]]:
         """
@@ -134,20 +137,15 @@ class FLOATDataset(Dataset):
             
             # 转换颜色空间并调整大小
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = cv2.resize(frame, (self.image_size, self.image_size))
-            # 归一化到 [-1, 1]
+            frame = cv2.resize(frame, (self.opt.input_size, self.opt.input_size))
             frame = frame.astype(np.float32) / 127.5 - 1.0
             frames.append(frame)
         
         cap.release()
         
-        if len(frames) == 0:
-            # 如果没有帧，创建一个默认帧
-            frames = [np.zeros((self.image_size, self.image_size, 3), dtype=np.float32)]
-        
+        assert len(frames) > 0, f"No frames found in {video_path}"
         # 转换为张量 (T, H, W, C) -> (T, C, H, W)
         video_tensor = torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2)
-        
         return video_tensor
     
     def _load_audio(self, audio_path: str) -> torch.Tensor:
@@ -161,8 +159,12 @@ class FLOATDataset(Dataset):
             音频张量 (1, T)
         """
         
-        speech_array, sampling_rate = librosa.load(audio_path, sr = self.audio_sample_rate)
-        return self.wav2vec_preprocessor(speech_array, sampling_rate = sampling_rate, return_tensors = 'pt').input_values[0]
+        speech_array, sampling_rate = librosa.load(audio_path, sr = self.opt.sampling_rate)
+        audio_tensor = self.wav2vec_preprocessor(speech_array, sampling_rate = sampling_rate, return_tensors = 'pt').input_values[0]
+        # 确保形状是 (1, sequence_length)
+        if audio_tensor.dim() == 1:
+            audio_tensor = audio_tensor.unsqueeze(0)
+        return audio_tensor
     
 
     @torch.no_grad()
@@ -178,7 +180,9 @@ class FLOATDataset(Dataset):
         Returns:
             动作潜在表示 (T, motion_dim)
         """
-        T = video_frames.shape[0]
+        # 确保输入张量在正确的设备上
+        device = next(self.motion_autoencoder.parameters()).device
+        video_frames = video_frames.to(device)
         
         d_r, r_d_lambda, d_r_feats = self.motion_autoencoder.enc(video_frames, input_target=None)
         r_d_lambda = self.motion_autoencoder.enc.fc(d_r)
@@ -210,6 +214,7 @@ class FLOATDataset(Dataset):
         return start_idx, end_idx
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        # print("inside getitem")
         """
         获取数据项
         
@@ -220,27 +225,46 @@ class FLOATDataset(Dataset):
             数据字典
         """
         data_item = self.data_list[idx]
+        # print(f"Loading data item {idx}: {data_item['video_path']}")
         
         # 加载视频和音频
+        # print("Loading video...")
         video_frames = self._load_video(data_item['video_path'])
+        # print(f"Video loaded, shape: {video_frames.shape}")
+        
+        # print("Loading audio...")
         audio = self._load_audio(data_item['audio_path'])
+        # print(f"Audio loaded, shape: {audio.shape}")
+
+        # 注意：不在数据集中移动数据到CUDA设备，避免多进程CUDA错误
+        # 数据移动将在训练循环中进行
 
         num_frames = video_frames.shape[0]
-        w_audio = self.audio_encoder.inference(audio, seq_len=num_frames)
+        # print(f"Starting audio encoder inference for {num_frames} frames...")
+        
+        # 注意：在多进程环境中，不能将数据移动到CUDA设备
+        # 音频编码将在训练循环中进行，这里只返回原始音频数据
+        # 确保音频张量在正确的设备上
+        device = next(self.audio_encoder.parameters()).device
+        audio = audio.to(device)
+        w_audio = self.audio_encoder.inference(audio, seq_len=num_frames).squeeze(0)
+        
         start_idx, end_idx = self._get_sequence_indices(num_frames)
         
         video_cur = video_frames[start_idx + self.prev_frames:end_idx]
         video_prev = video_frames[start_idx: start_idx + self.prev_frames]
         w_audio_cur = w_audio[start_idx + self.prev_frames:end_idx]
         w_audio_prev = w_audio[start_idx: start_idx + self.prev_frames]
-        # 提取动作潜在表示
+        
         motion_latent_cur = self._extract_motion_latent(video_cur)
         motion_latent_prev = self._extract_motion_latent(video_prev)
+        emotion = F.one_hot(torch.tensor(data_item['emotion']), num_classes = self.opt.dim_e)
 
-        emotion = F.one_hot(data_item['emotion'], num_classes = self.opt.dim_e)
         # 准备参考帧（第一帧）
-        reference_frame = video_frames[0]
-        reference_motion = self._extract_motion_latent(reference_frame)
+        reference_frame = video_frames[0:1].squeeze(0)  # 保持维度 (1, C, H, W)
+        # print("Extracting reference motion...")
+        reference_motion = self._extract_motion_latent(reference_frame).squeeze(0)
+        # print(f"Reference motion extracted, shape: {reference_motion.shape}")
         
         result = {
             'video_cur': video_cur,  # (T, C, H, W)
@@ -254,7 +278,7 @@ class FLOATDataset(Dataset):
             'emotion_features': emotion, 
             'actor_id': data_item['actor_id'],
         }
-        
+        # print("inside getitem return")
         return result
 
 
@@ -292,29 +316,4 @@ def create_dataloader(data_root: str,
     )
     
     return dataloader
-
-
-def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-    """
-    自定义批处理函数
     
-    Args:
-        batch: 批次数据列表
-        
-    Returns:
-        批处理后的数据字典
-    """
-    # 获取所有键
-    keys = batch[0].keys()
-    
-    result = {}
-    for key in keys:
-        if key == 'actor_id':
-            # 字符串列表
-            result[key] = [item[key] for item in batch]
-        else:
-            # 张量堆叠
-            tensors = [item[key] for item in batch]
-            result[key] = torch.stack(tensors, dim=0)
-    
-    return result

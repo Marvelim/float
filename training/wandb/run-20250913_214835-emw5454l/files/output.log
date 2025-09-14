@@ -1,0 +1,29 @@
+使用优化版本的数据集 (dataset_test.py)...
+Preprocessing data...
+Cache cleared: /tmp/float_cache
+Initializing models for preprocessing...
+Some weights of the model checkpoint at /home/mli374/float/checkpoints/wav2vec2-base-960h were not used when initializing Wav2VecModel: ['lm_head.bias', 'lm_head.weight']
+- This IS expected if you are initializing Wav2VecModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing Wav2VecModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of Wav2VecModel were not initialized from the model checkpoint at /home/mli374/float/checkpoints/wav2vec2-base-960h and are newly initialized: ['wav2vec2.masked_spec_embed']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Loading motion_autoencoder weights from float.pth...
+/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/_utils.py:776: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+Successfully loaded 177 motion_autoencoder parameters
+Preprocessing 120 samples...
+Preprocessing: 100%|█████████████████████████████████████████████████████████████████████████████████████████████| 120/120 [1:16:55<00:00, 38.46s/it]
+Successfully preprocessed 120 samples
+Saving preprocessed data to /tmp/float_cache/preprocessed_train.pkl
+Traceback (most recent call last):
+  File "train.py", line 365, in <module>
+    main(args)
+  File "train.py", line 138, in main
+    train_dataloader = create_dataloader_optimized(
+  File "/home/mli374/float/training/dataset_test.py", line 435, in create_dataloader_optimized
+    dataset = FLOATDatasetOptimized(
+  File "/home/mli374/float/training/dataset_test.py", line 108, in __init__
+    self._save_cache()
+  File "/home/mli374/float/training/dataset_test.py", line 365, in _save_cache
+    with open(self.cache_file, 'wb') as f:
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/float_cache/preprocessed_train.pkl'

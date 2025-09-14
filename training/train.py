@@ -1,520 +1,365 @@
 """
-Main training script for FLOAT model with Rectified Flow
-使用 Rectified Flow 的 FLOAT 模型主训练脚本
+Simplified training script for FLOAT model with Rectified Flow
+仿照 meanflow.py 的简洁风格重写的 FLOAT 训练脚本
 """
 
 import os
 import sys
-import argparse
 import time
-import logging
-from pathlib import Path
-from typing import Dict, Any, Optional
-import json
+import argparse
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler, autocast
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-
-# 添加项目路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.float.FLOAT import FLOAT
-from training.dataset import create_dataloader, collate_fn
-from training.rectified_flow import RectifiedFlow, FlowMatchingTrainer
-from training.utils import (
-    setup_logging, set_seed, save_checkpoint, load_checkpoint,
-    AverageMeter, get_lr_scheduler, setup_wandb
-)
+import torch
+import torch.optim as optim
+from tqdm import tqdm
+from accelerate import Accelerator
+import wandb
+from models.float.FMT import FlowMatchingTransformer
+
+# 添加项目路径
+
+# from training.dataset import FLOATDataset  # 原始版本，已注释
+from training.dataset_test import create_dataloader_optimized  # 优化版本
+from training.rectified_flow import RectifiedFlow
+from training.utils import set_seed
+from options.base_options import BaseOptions
 
 
-class FLOATTrainer:
-    """FLOAT 训练器主类"""
+def cycle(iterable):
+    """无限循环迭代器"""
+    while True:
+        for i in iterable:
+            yield i
+
+
+def build_argparser_from_base() -> argparse.Namespace:
+    """使用 BaseOptions 并补充训练相关参数"""
+    base = BaseOptions()
+    parser = base.initialize(argparse.ArgumentParser(description="FLOAT 模型训练"))
     
-    def __init__(self, opt: dict):
-        """
-        初始化训练器
-        
-        Args:
-            config: 训练配置
-        """
-        self.opt = opt
-        self.device = torch.device(opt.device)
-        self.rank = opt.rank
-        
-        # 设置随机种子
-        set_seed(opt.seed)
-        
-        # 设置日志
-        self.logger = setup_logging(
-            log_level=logging.INFO,
-            log_file=os.path.join(opt.output_dir, "train.log")
-        )
-        
-        # 初始化模型
-        self.model = self._build_model()
-        
-        # 初始化损失函数
-        self.loss_fn = RectifiedFlow.loss (
-            sigma_min=opt.training.sigma_min,
-            sigma_max=opt.training.sigma_max,
-            loss_type=opt.training.loss_type
-        )
-        
-        # 初始化优化器
-        self.optimizer = self._build_optimizer()
-        
-        # 初始化学习率调度器
-        self.lr_scheduler = self._build_lr_scheduler(opt)
-        
-        # 初始化数据加载器
-        self.train_loader, self.val_loader = self._build_dataloaders()
-        
-        # 初始化混合精度训练
-        self.scaler = GradScaler() if opt.training.use_amp else None
-        # 初始化训练状态
-        self.current_epoch = 0
-        self.global_step = 0
-        self.best_val_loss = float('inf')
-        self.early_stopping_counter = 0
-        
-        # 初始化指标记录
-        self.train_metrics = AverageMeter()
-        self.val_metrics = AverageMeter()
-        
-        # 初始化 wandb（如果启用）
-        if opt.training.use_wandb:
-            setup_wandb(config)
-        
-        self.logger.info(f"初始化完成，使用设备: {self.device}")
-        self.logger.info(f"模型参数量: {sum(p.numel() for p in self.model.parameters()):,}")
+    # 添加 wandb 相关参数
+    parser.add_argument('--wandb_project', type=str, default='float-fmt',
+                       help='wandb 项目名称')
+    parser.add_argument('--wandb_name', type=str, default=None,
+                       help='wandb 运行名称，如果为 None 则自动生成')
+    parser.add_argument('--disable_wandb', action='store_true',
+                       help='禁用 wandb 日志记录')
+
+    # 添加数据集优化相关参数
+    parser.add_argument('--force_preprocess', action='store_true',
+                       help='强制重新预处理数据集（忽略缓存）')
+    parser.add_argument('--cache_dir', type=str, default=None,
+                       help='缓存目录路径，如果为 None 则使用 data_root/cache')
     
-    def _build_model(self) -> nn.Module:
-        """构建模型"""
-        # 创建一个模拟的 opt 对象来匹配 FLOAT 的接口
-        class OptMock:
-            def __init__(self, opt):
-                # 从 config 复制所有模型参数
-                for key, value in opt.model.__dict__.items():
-                    setattr(self, key, value)
-                
-                # 添加必要的设备信息
-                self.rank = opt.rank
-        
-        opt = OptMock(self.opt)
-        model = FLOAT(opt)
-        model = model.to(self.device)
-        
-        # 如果使用分布式训练
-        if self.opt.training.use_ddp and torch.cuda.device_count() > 1:
-            model = DDP(model, device_ids=[self.rank])
-        
-        return model
+    # 使用修改后的 parser 解析参数，而不是 base.parse()
+    opt = parser.parse_args()
+    if not hasattr(opt, 'rank'):
+        opt.rank = 0
+    return opt
+
+
+def main(opt: argparse.Namespace):
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    # 训练参数
+    n_steps = opt.steps
+    batch_size = opt.batch_size
+    learning_rate = opt.lr
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     
-    def _build_optimizer(self) -> optim.Optimizer:
-        """构建优化器"""
-        opt = self.opt
-        if opt.optimizer.lower() == "adam":
-            optimizer = optim.Adam(
-                self.model.parameters(),
-                lr=opt.learning_rate,
-                betas=(opt.beta1, opt.beta2),
-                eps=opt.eps,
-                weight_decay=opt.weight_decay
-            )
-        elif opt.optimizer.lower() == "adamw":
-            optimizer = optim.AdamW(
-                self.model.parameters(),
-                lr=opt.learning_rate,
-                betas=(opt.beta1, opt.beta2),
-                eps=opt.eps,
-                weight_decay=opt.weight_decay
-            )
-        elif opt.optimizer.lower() == "sgd":
-            optimizer = optim.SGD(
-                self.model.parameters(),
-                lr=opt.learning_rate,
-                momentum=0.9,
-                weight_decay=opt.weight_decay
-            )
+    # 修复路径问题 - 确保指向正确的 checkpoints 目录
+    # 当前工作目录是 /home/mli374/float，所以 checkpoints 应该在项目根目录下
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 回到项目根目录
+    
+    if not os.path.isabs(opt.wav2vec_model_path):
+        # 如果路径是相对路径，从项目根目录开始解析
+        opt.wav2vec_model_path = os.path.join(project_root, opt.wav2vec_model_path.lstrip('./'))
+    if not os.path.isabs(opt.audio2emotion_path):
+        opt.audio2emotion_path = os.path.join(project_root, opt.audio2emotion_path.lstrip('./'))
+    
+    # print(f"项目根目录: {project_root}")
+    # print(f"Wav2Vec2 模型路径: {opt.wav2vec_model_path}")
+    # print(f"情感模型路径: {opt.audio2emotion_path}")
+    
+    # 验证路径是否存在
+    if not os.path.exists(opt.wav2vec_model_path):
+        raise FileNotFoundError(f"Wav2Vec2 模型路径不存在: {opt.wav2vec_model_path}")
+    if not os.path.exists(opt.audio2emotion_path):
+        raise FileNotFoundError(f"情感模型路径不存在: {opt.audio2emotion_path}")
+    
+    # 创建输出目录
+    os.makedirs('checkpoints/float_fmt', exist_ok=True)
+    os.makedirs('samples', exist_ok=True)
+    
+    # 初始化 Accelerator
+    accelerator = Accelerator(mixed_precision=opt.mixed_precision)
+    
+    # 初始化 wandb（只在主进程中初始化）
+    if accelerator.is_main_process and not getattr(opt, 'disable_wandb', False):
+        # 生成运行名称
+        if getattr(opt, 'wandb_name', None) is None:
+            wandb_name = f"float_fmt_{opt.steps}steps_{int(time.time())}"
         else:
-            raise ValueError(f"不支持的优化器: {opt.optimizer}")
-        
-        return optimizer
-    
-    def _build_lr_scheduler(self):
-        """构建学习率调度器"""
-        return get_lr_scheduler(
-            self.optimizer,
-            scheduler_type=self.opt.lr_scheduler,
-            num_epochs=self.opt.num_epochs,
-            warmup_epochs=self.opt.lr_warmup_epochs,
-            min_lr=self.opt.lr_min
-        )
-    
-    def _build_dataloaders(self) -> tuple:
-        """构建数据加载器"""
-        # 训练数据加载器
-        train_loader = create_dataloader(
-            data_root=self.config.data.data_root,
-            batch_size=self.config.training.batch_size,
-            num_workers=self.config.data.num_workers,
-            train=True,
-            video_fps=self.config.data.video_fps,
-            audio_sample_rate=self.config.data.audio_sample_rate,
-            wav2vec_sec=self.config.data.wav2vec_sec,
-            sequence_length=self.config.data.sequence_length,
-            prev_frames=self.config.data.prev_frames,
-            image_size=self.config.data.image_size,
-            motion_dim=self.config.data.motion_dim,
-            audio_dim=self.config.data.audio_dim,
-            emotion_dim=self.config.data.emotion_dim
-        )
-        
-        # 验证数据加载器
-        val_loader = create_dataloader(
-            data_root=self.config.data.data_root,
-            batch_size=self.config.training.batch_size,
-            num_workers=self.config.data.num_workers,
-            train=False,
-            video_fps=self.config.data.video_fps,
-            audio_sample_rate=self.config.data.audio_sample_rate,
-            wav2vec_sec=self.config.data.wav2vec_sec,
-            sequence_length=self.config.data.sequence_length,
-            prev_frames=self.config.data.prev_frames,
-            image_size=self.config.data.image_size,
-            motion_dim=self.config.data.motion_dim,
-            audio_dim=self.config.data.audio_dim,
-            emotion_dim=self.config.data.emotion_dim
-        )
-        
-        return train_loader, val_loader
-    
-    def train_epoch(self) -> Dict[str, float]:
-        """训练一个 epoch"""
-        self.model.train()
-        self.train_metrics.reset()
-        
-        epoch_start_time = time.time()
-        
-        for batch_idx, batch in enumerate(self.train_loader):
-            step_start_time = time.time()
+            wandb_name = opt.wandb_name
             
-            # 训练步骤
-            metrics = self.train_step(batch)
-            self.train_metrics.update(metrics)
+        wandb.init(
+            project=getattr(opt, 'wandb_project', 'float-fmt'),
+            name=wandb_name,
+            config={
+                "learning_rate": learning_rate,
+                "batch_size": batch_size,
+                "steps": n_steps,
+                "mixed_precision": opt.mixed_precision,
+                "seed": getattr(opt, 'seed', 42),
+                "data_root": opt.data_root,
+                "input_size": opt.input_size,
+                "dim_w": opt.dim_w,
+                "dim_m": opt.dim_m,
+                "dim_e": opt.dim_e,
+                "fps": opt.fps,
+                "wav2vec_sec": opt.wav2vec_sec,
+                "num_prev_frames": opt.num_prev_frames,
+                "wandb_project": getattr(opt, 'wandb_project', 'float-fmt'),
+                "wandb_name": wandb_name,
+                # 优化版本相关配置
+                "dataset_version": "optimized",
+                "force_preprocess": getattr(opt, 'force_preprocess', False),
+                "cache_dir": getattr(opt, 'cache_dir', None),
+            }
+        )
+    
+    # 设置随机种子
+    set_seed(opt.seed if hasattr(opt, 'seed') else 42)
+    
+    # 创建优化的数据集和数据加载器
+    print("使用优化版本的数据集 (dataset_test.py)...")
+
+    # 使用优化的数据加载器创建函数
+    train_dataloader = create_dataloader_optimized(
+        data_root=opt.data_root,
+        batch_size=batch_size,
+        num_workers=getattr(opt, 'num_workers', 0),
+        train=True,
+        opt=opt,
+        cache_dir=getattr(opt, 'cache_dir', None),  # 可通过命令行参数指定缓存目录
+        force_preprocess=getattr(opt, 'force_preprocess', False)  # 可通过命令行参数控制
+    )
+
+    # 获取数据集实例进行健壮性检查
+    dataset = train_dataloader.dataset
+
+    # 简单的健壮性检查，避免空数据集导致无限等待
+    if len(dataset) == 0:
+        raise ValueError(f"数据集为空: 请检查路径 {opt.data_root} 下是否存在有效数据")
+
+    print(f"优化数据集加载完成，共 {len(dataset)} 个样本")
+    
+    # 创建模型
+    model = FlowMatchingTransformer(opt).to(accelerator.device)
+    
+    # 注意：优化版本的数据集已经在预处理阶段完成了所有模型推理
+    # 不需要在训练时加载和管理数据集中的模型组件
+    print("优化版本数据集无需加载模型组件，所有计算已在预处理阶段完成")
+    
+    # 创建优化器
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=0.0)
+    # 创建损失函数
+    # 为 RectifiedFlow 传入 opt（包含丢弃概率等，可通过命令行覆盖）
+    rectified_flow = RectifiedFlow(opt)
+    # 准备训练（优化版本不需要准备数据集，因为没有模型组件需要分布式处理）
+    model, optimizer, train_dataloader = accelerator.prepare(model, optimizer, train_dataloader)
+    # 在 prepare 之后包一层无限迭代器，保证 sampler 等加速器包装生效
+    train_iter = cycle(train_dataloader)
+    # 训练状态
+    global_step = 0
+    losses = 0.0
+    
+    log_step = 500
+    sample_step = 2000
+    save_step = 10000
+    
+    # print("开始训练 FLOAT 模型...")
+    # print(f"设备: {accelerator.device}")
+    # print(f"模型参数量: {sum(p.numel() for p in model.parameters()):,}")
+    
+    with tqdm(range(n_steps), dynamic_ncols=True) as pbar:
+        pbar.set_description("Training")
+        model.train()
+        
+        for step in pbar:
+            # 获取数据
+            # print("获取数据")
+            try:
+                batch = next(train_iter)
+            except StopIteration:
+                # 理论上不会发生（因为有 cycle），但为了调试更安全
+                # print("DataLoader 迭代结束，重新创建迭代器")
+                train_iter = cycle(train_dataloader)
+                batch = next(train_iter)
+            # print("数据获取完成")
+            # 准备数据
+            # 兼容不同的数据字段命名
+            def _get_first_available(d, keys):
+                for k in keys:
+                    if k in d:
+                        return d[k]
+                raise KeyError(f"找不到可用的键: {keys}")
+
+            x1 = _get_first_available(batch, ['motion_latent', 'motion_latent_cur']).to(accelerator.device)
+            # 处理条件张量的形状
+            wa = _get_first_available(batch, ['audio_features', 'audio_latent_cur']).to(accelerator.device)
+            wr = batch['reference_motion'].to(accelerator.device)
+            we = batch['emotion_features'].to(accelerator.device)
             
-            # 更新全局步数
-            self.global_step += 1
+            print("wa.shape: ", wa.shape)
+            print("wr.shape: ", wr.shape)
+            print("we.shape: ", we.shape)
+            
+            # 为 wr 和 we 添加序列维度，使其与 wa 兼容
+            wr = wr.unsqueeze(1)  # (batch_size, motion_dim) -> (batch_size, 1, motion_dim)
+            we = we.unsqueeze(1)  # (batch_size, emotion_dim) -> (batch_size, 1, emotion_dim)
+            
+            print("After unsqueeze - wr.shape: ", wr.shape)
+            print("After unsqueeze - we.shape: ", we.shape)
+            print("wa.shape[1] (seq_len): ", wa.shape[1])
+            
+            conditions = {
+                'wa': wa,
+                'wr': wr,
+                'we': we,
+            }
+
+            
+            
+            # 前一帧条件（如果有）
+            prev_conditions = None
+            if 'prev_motion' in batch or 'motion_latent_prev' in batch:
+                prev_conditions = {
+                    'prev_x': _get_first_available(batch, ['prev_motion', 'motion_latent_prev']).to(accelerator.device),
+                    'prev_wa': _get_first_available(batch, ['prev_audio', 'audio_latent_prev']).to(accelerator.device),
+                }
+            
+            # print(x1, conditions, prev_conditions)
+            
+            # 计算损失
+            loss_dict = rectified_flow.loss(model, x1, conditions, prev_conditions)
+            loss = loss_dict['loss']
+            
+            # 反向传播
+            accelerator.backward(loss)
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            # 更新状态
+            global_step += 1
+            losses += loss.item()
+            
+            # 更新进度条
+            pbar.set_postfix({
+                'loss': f'{loss.item():.6f}',
+                'avg_loss': f'{losses / global_step:.6f}'
+            })
+            
+            # 记录 wandb 日志
+            if accelerator.is_main_process and not getattr(opt, 'disable_wandb', False):
+                wandb.log({
+                    "train/loss": loss.item(),
+                    "train/avg_loss": losses / global_step,
+                    "train/learning_rate": optimizer.param_groups[0]['lr'],
+                    "train/global_step": global_step,
+                }, step=global_step)
             
             # 记录日志
-            if self.global_step % self.config.training.log_interval == 0:
-                step_time = time.time() - step_start_time
-                self.logger.info(
-                    f"Epoch [{self.current_epoch}/{self.config.training.num_epochs}] "
-                    f"Step [{batch_idx}/{len(self.train_loader)}] "
-                    f"Loss: {metrics['loss']:.6f} "
-                    f"LR: {self.optimizer.param_groups[0]['lr']:.2e} "
-                    f"Time: {step_time:.3f}s"
+            if accelerator.is_main_process and global_step % opt.log_step == 0:
+                current_time = time.asctime(time.localtime(time.time()))
+                lr = optimizer.param_groups[0]['lr']
+                
+                log_message = (
+                    f'{current_time}\n'
+                    f'Global Step: {global_step}\n'
+                    f'Loss: {losses / opt.log_step:.6f}\n'
+                    f'Learning Rate: {lr:.6f}\n'
+                    f'{"="*50}\n'
                 )
                 
-                # 记录到 wandb
-                if self.config.training.use_wandb:
-                    import wandb
-                    wandb.log({
-                        'train/loss': metrics['loss'],
-                        'train/grad_norm': metrics.get('grad_norm', 0),
-                        'train/lr': self.optimizer.param_groups[0]['lr'],
-                        'train/step_time': step_time,
-                        'global_step': self.global_step
-                    })
+                with open('training_log.txt', mode='a') as f:
+                    f.write(log_message)
+                
+                losses = 0.0
             
-            # 验证
-            if self.global_step % self.config.training.val_check_interval == 0:
-                val_metrics = self.validate()
-                self.logger.info(f"验证损失: {val_metrics['val_loss']:.6f}")
+            # 生成样本
+            if global_step % opt.sample_step == 0 and accelerator.is_main_process:
+                model.eval()
+                with torch.no_grad():
+                    try:
+                        # 使用当前批次的条件进行采样
+                        sample_conditions = {
+                            'wa': conditions['wa'][:1],  # 取第一个样本
+                            'wr': conditions['wr'][:1],
+                            'we': conditions['we'][:1]
+                        }
+                        
+                        # 生成样本（这里使用简化的采样方法）
+                        # 实际应用中需要根据 FLOAT 模型的具体采样方法来实现
+                        sample_path = f"samples/step_{global_step}.pt"
+                        torch.save({
+                            'conditions': sample_conditions,
+                            'step': global_step
+                        }, sample_path)
+                        # print(f"样本已保存: {sample_path}")
+                        
+                    except Exception as e:
+                        # print(f"采样失败: {e}")
+                        pass
                 
-                # 记录到 wandb
-                if self.config.training.use_wandb:
-                    import wandb
-                    wandb.log({
-                        'val/loss': val_metrics['val_loss'],
-                        'global_step': self.global_step
-                    })
-                
-                # 早停检查
-                if self._check_early_stopping(val_metrics['val_loss']):
-                    self.logger.info("早停触发，停止训练")
-                    return self.train_metrics.avg
+                model.train()
+                accelerator.wait_for_everyone()
             
             # 保存检查点
-            if self.global_step % self.config.training.save_checkpoint_interval == 0:
-                self.save_checkpoint(f"checkpoint_step_{self.global_step}.pth")
-        
-        epoch_time = time.time() - epoch_start_time
-        self.logger.info(f"Epoch {self.current_epoch} 完成，耗时: {epoch_time:.2f}s")
-        
-        return self.train_metrics.avg
+            if global_step % opt.save_step == 0 and accelerator.is_main_process:
+                model_module = model.module if hasattr(model, 'module') else model
+                ckpt_path = f"checkpoints/step_{global_step}.pt"
+                torch.save({
+                    'model_state_dict': model_module.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'global_step': global_step,
+                    'loss': loss.item()
+                }, ckpt_path)
+                
+                # 记录检查点保存到 wandb
+                if not getattr(opt, 'disable_wandb', False):
+                    wandb.log({
+                        "checkpoint/saved": True,
+                        "checkpoint/step": global_step,
+                        "checkpoint/loss": loss.item(),
+                    }, step=global_step)
+                # print(f"检查点已保存: {ckpt_path}")
     
-    def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """执行一个训练步骤"""
-        # 准备数据
-        for key in batch:
-            if isinstance(batch[key], torch.Tensor):
-                batch[key] = batch[key].to(self.device, non_blocking=True)
+    # 保存最终模型
+    if accelerator.is_main_process:
+        model_module = model.module if hasattr(model, 'module') else model
+        final_ckpt_path = f"checkpoints/final_step_{global_step}.pt"
+        torch.save({
+            'model_state_dict': model_module.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'global_step': global_step,
+            'loss': loss.item()
+        }, final_ckpt_path)
         
-        # 前向传播
-        if self.config.training.use_amp:
-            with autocast(dtype=torch.float16 if self.config.training.amp_dtype == "float16" else torch.bfloat16):
-                loss_dict = self._compute_loss(batch)
-                loss = loss_dict['loss']
-        else:
-            loss_dict = self._compute_loss(batch)
-            loss = loss_dict['loss']
-        
-        # 梯度累积
-        loss = loss / self.config.training.gradient_accumulation_steps
-        
-        # 反向传播
-        if self.config.training.use_amp:
-            self.scaler.scale(loss).backward()
+        # 记录最终模型保存到 wandb
+        if not getattr(opt, 'disable_wandb', False):
+            wandb.log({
+                "final_model/saved": True,
+                "final_model/step": global_step,
+                "final_model/loss": loss.item(),
+            }, step=global_step)
             
-            if (self.global_step + 1) % self.config.training.gradient_accumulation_steps == 0:
-                # 梯度裁剪
-                if self.config.training.gradient_clip_val > 0:
-                    self.scaler.unscale_(self.optimizer)
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), 
-                        self.config.training.gradient_clip_val
-                    )
-                else:
-                    grad_norm = 0
-                
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-                self.optimizer.zero_grad()
-        else:
-            loss.backward()
-            
-            if (self.global_step + 1) % self.config.training.gradient_accumulation_steps == 0:
-                # 梯度裁剪
-                if self.config.training.gradient_clip_val > 0:
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), 
-                        self.config.training.gradient_clip_val
-                    )
-                else:
-                    grad_norm = 0
-                
-                self.optimizer.step()
-                self.optimizer.zero_grad()
-        
-        return {
-            'loss': loss.item() * self.config.training.gradient_accumulation_steps,
-            'grad_norm': grad_norm if 'grad_norm' in locals() else 0
-        }
-    
-    def _compute_loss(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """计算损失"""
-        x1 = batch['motion_latent']  # 目标动作序列
-        
-        conditions = {
-            'wa': batch['audio_features'],
-            'wr': batch['reference_motion'],
-            'we': batch['emotion_features']
-        }
-        
-        # 准备前一帧条件
-        prev_conditions = None
-        if 'prev_motion' in batch:
-            prev_conditions = {
-                'prev_x': batch['prev_motion'],
-                'prev_wa': batch['prev_audio']
-            }
-        
-        # 使用 FMT 模型计算损失
-        loss_dict = self.loss_fn(self.model.fmt, x1, conditions, prev_conditions)
-        
-        return loss_dict
-    
-    @torch.no_grad()
-    def validate(self) -> Dict[str, float]:
-        """验证模型"""
-        self.model.eval()
-        self.val_metrics.reset()
-        
-        for batch in self.val_loader:
-            # 准备数据
-            for key in batch:
-                if isinstance(batch[key], torch.Tensor):
-                    batch[key] = batch[key].to(self.device, non_blocking=True)
-            
-            # 前向传播
-            if self.config.training.use_amp:
-                with autocast(dtype=torch.float16 if self.config.training.amp_dtype == "float16" else torch.bfloat16):
-                    loss_dict = self._compute_loss(batch)
-            else:
-                loss_dict = self._compute_loss(batch)
-            
-            metrics = {'val_loss': loss_dict['loss'].item()}
-            self.val_metrics.update(metrics)
-        
-        return self.val_metrics.avg
-    
-    def _check_early_stopping(self, val_loss: float) -> bool:
-        """检查早停条件"""
-        if val_loss < self.best_val_loss - self.config.training.early_stopping_min_delta:
-            self.best_val_loss = val_loss
-            self.early_stopping_counter = 0
-            return False
-        else:
-            self.early_stopping_counter += 1
-            return self.early_stopping_counter >= self.config.training.early_stopping_patience
-    
-    def save_checkpoint(self, filename: str):
-        """保存检查点"""
-        checkpoint_path = os.path.join(self.config.output_dir, filename)
-        save_checkpoint(
-            model=self.model,
-            optimizer=self.optimizer,
-            lr_scheduler=self.lr_scheduler,
-            epoch=self.current_epoch,
-            global_step=self.global_step,
-            best_val_loss=self.best_val_loss,
-            config=self.config,
-            filepath=checkpoint_path
-        )
-        self.logger.info(f"检查点已保存: {checkpoint_path}")
-    
-    def load_checkpoint(self, checkpoint_path: str):
-        """加载检查点"""
-        checkpoint = load_checkpoint(checkpoint_path, self.device)
-        
-        # 加载模型状态
-        if isinstance(self.model, DDP):
-            self.model.module.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-        
-        # 加载优化器状态
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        
-        # 加载学习率调度器状态
-        if 'lr_scheduler_state_dict' in checkpoint:
-            self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
-        
-        # 加载训练状态
-        self.current_epoch = checkpoint.get('epoch', 0)
-        self.global_step = checkpoint.get('global_step', 0)
-        self.best_val_loss = checkpoint.get('best_val_loss', float('inf'))
-        
-        self.logger.info(f"检查点已加载: {checkpoint_path}")
-        self.logger.info(f"继续训练从 epoch {self.current_epoch}, step {self.global_step}")
-    
-    def train(self):
-        """主训练循环"""
-        self.logger.info("开始训练...")
-        
-        # 如果有检查点，加载它
-        if self.config.resume_from_checkpoint:
-            self.load_checkpoint(self.config.resume_from_checkpoint)
-        
-        # 保存配置
-        config_path = os.path.join(self.config.output_dir, "config.json")
-        self.config.save(config_path)
-        
-        try:
-            for epoch in range(self.current_epoch, self.config.training.num_epochs):
-                self.current_epoch = epoch
-                
-                # 训练一个 epoch
-                train_metrics = self.train_epoch()
-                
-                # 更新学习率
-                if self.lr_scheduler:
-                    self.lr_scheduler.step()
-                
-                # 验证
-                val_metrics = self.validate()
-                
-                # 记录 epoch 级别的指标
-                self.logger.info(
-                    f"Epoch {epoch} 完成 - "
-                    f"训练损失: {train_metrics['loss']:.6f}, "
-                    f"验证损失: {val_metrics['val_loss']:.6f}"
-                )
-                
-                # 保存最佳模型
-                if val_metrics['val_loss'] < self.best_val_loss:
-                    self.best_val_loss = val_metrics['val_loss']
-                    self.save_checkpoint("best_model.pth")
-                
-                # 保存定期检查点
-                self.save_checkpoint(f"checkpoint_epoch_{epoch}.pth")
-                
-                # 早停检查
-                if self._check_early_stopping(val_metrics['val_loss']):
-                    self.logger.info("早停触发，停止训练")
-                    break
-        
-        except KeyboardInterrupt:
-            self.logger.info("训练被用户中断")
-            self.save_checkpoint("interrupted_checkpoint.pth")
-        
-        except Exception as e:
-            self.logger.error(f"训练过程中发生错误: {e}")
-            self.save_checkpoint("error_checkpoint.pth")
-            raise
-        
-        finally:
-            self.logger.info("训练完成")
-            if self.config.training.use_wandb:
-                import wandb
-                wandb.finish()
+            # 完成 wandb 运行
+            wandb.finish()
+        # print(f"最终模型已保存: {final_ckpt_path}")
 
 
-def main():
-    """主函数"""
-    parser = argparse.ArgumentParser(description="FLOAT 模型训练")
-    parser.add_argument("--config", type=str, default="default", help="配置名称")
-    parser.add_argument("--config-file", type=str, help="配置文件路径")
-    parser.add_argument("--output-dir", type=str, help="输出目录")
-    parser.add_argument("--resume", type=str, help="从检查点恢复训练")
-    parser.add_argument("--batch-size", type=int, help="批次大小")
-    parser.add_argument("--learning-rate", type=float, help="学习率")
-    parser.add_argument("--num-epochs", type=int, help="训练轮数")
-    parser.add_argument("--device", type=str, default="auto", help="设备")
-    
-    args = parser.parse_args()
-    
-    # 加载配置
-    if args.config_file:
-        config = Config.load(args.config_file)
-    else:
-        config = get_config(args.config)
-    
-    # 从命令行参数更新配置
-    if args.output_dir:
-        config.output_dir = args.output_dir
-    if args.resume:
-        config.resume_from_checkpoint = args.resume
-    if args.batch_size:
-        config.training.batch_size = args.batch_size
-    if args.learning_rate:
-        config.training.learning_rate = args.learning_rate
-    if args.num_epochs:
-        config.training.num_epochs = args.num_epochs
-    if args.device != "auto":
-        config.device = args.device
-    
-    # 创建训练器并开始训练
-    trainer = FLOATTrainer(config)
-    trainer.train()
-
-
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    # 从 BaseOptions 构建并解析参数
+    args = build_argparser_from_base()
+    main(args)

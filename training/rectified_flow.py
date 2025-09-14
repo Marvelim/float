@@ -28,8 +28,30 @@ class RectifiedFlow(nn.Module):
         self.opt = opt
 
     def do_cfg(self, x, dropout_prob):
+        """
+        实现 classifier-free guidance 的 dropout
+        
+        Args:
+            x: 输入张量 (batch_size, ...)
+            dropout_prob: dropout 概率
+            
+        Returns:
+            应用了 CFG dropout 的张量
+        """
+        if dropout_prob == 0.0:
+            return x
+            
+        batch_size = x.shape[0]
+        # 对整个 batch 进行 mask（每个样本要么全部被 mask，要么全部不被 mask）
+        cfg_mask = torch.rand(batch_size, device=x.device) < dropout_prob
+        
+        # 将 mask 扩展到与 x 相同的形状
+        cfg_mask = cfg_mask.view(batch_size, *([1] * (x.dim() - 1)))
+        
+        # 创建无条件输入（通常是零向量）
         uncond = torch.zeros_like(x)
-        cfg_mask = torch.rand(x) < dropout_prob
+        
+        # 应用 mask：如果 cfg_mask 为 True，使用无条件输入；否则使用原始输入
         return torch.where(cfg_mask, uncond, x)
 
     def loss(self, 
@@ -53,11 +75,14 @@ class RectifiedFlow(nn.Module):
         device = x1.device
         
         # 采样时间步
-        t = torch.randn(batch_size, device)
+        t = torch.rand(batch_size, device=device)
         
         # 采样噪声
         x0 = torch.randn_like(x1)
-        x_t = (1 - t) * x0 + t * x1
+        
+        # 将 t 扩展到与 x1 相同的形状进行广播
+        t_expanded = t.view(batch_size, *([1] * (x1.dim() - 1)))
+        x_t = (1 - t_expanded) * x0 + t_expanded * x1
         v_t = x1 - x0
         
         wa, wr, we = conditions['wa'], conditions['wr'], conditions['we']
@@ -80,8 +105,8 @@ class RectifiedFlow(nn.Module):
             train=True
         )
 
-        out_prev = model_output[:, :self.num_prev_frames]
-        out_current = model_output[:, self.num_prev_frames:]
+        out_prev = model_output[:, :self.opt.num_prev_frames]
+        out_current = model_output[:, self.opt.num_prev_frames:]
 
         loss_prev = F.l1_loss(out_prev, prev_x)
         loss_current = F.l1_loss(out_current, v_t)

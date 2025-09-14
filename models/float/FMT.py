@@ -286,7 +286,7 @@ class FlowMatchingTransformer(BaseModel):
 
 		# condition encoding
 		wa = self.sequence_embedder(wa, dropout_prob = self.opt.audio_dropout_prob, train=train)
-		wr = self.sequence_embedder(wr.unsqueeze(1), dropout_prob = self.opt.ref_dropout_prob, train=train)
+		wr = self.sequence_embedder(wr, dropout_prob = self.opt.ref_dropout_prob, train=train)
 		we = self.sequence_embedder(we, dropout_prob = self.opt.emotion_dropout_prob, train=train)
 		
 		# previous condition encoding

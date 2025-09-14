@@ -1,0 +1,31 @@
+2025-09-13 21:45:05,073 INFO    MainThread:3664082 [wandb_setup.py:_flush():81] Current SDK version is 0.21.4
+2025-09-13 21:45:05,073 INFO    MainThread:3664082 [wandb_setup.py:_flush():81] Configure stats pid to 3664082
+2025-09-13 21:45:05,073 INFO    MainThread:3664082 [wandb_setup.py:_flush():81] Loading settings from /home/mli374/.config/wandb/settings
+2025-09-13 21:45:05,073 INFO    MainThread:3664082 [wandb_setup.py:_flush():81] Loading settings from /home/mli374/float/training/wandb/settings
+2025-09-13 21:45:05,073 INFO    MainThread:3664082 [wandb_setup.py:_flush():81] Loading settings from environment variables
+2025-09-13 21:45:05,074 INFO    MainThread:3664082 [wandb_init.py:setup_run_log_directory():686] Logging user logs to /home/mli374/float/training/wandb/run-20250913_214505-64vpnews/logs/debug.log
+2025-09-13 21:45:05,074 INFO    MainThread:3664082 [wandb_init.py:setup_run_log_directory():687] Logging internal logs to /home/mli374/float/training/wandb/run-20250913_214505-64vpnews/logs/debug-internal.log
+2025-09-13 21:45:05,074 INFO    MainThread:3664082 [wandb_init.py:init():813] calling init triggers
+2025-09-13 21:45:05,074 INFO    MainThread:3664082 [wandb_init.py:init():818] wandb.init called with sweep_config: {}
+config: {'learning_rate': 0.0001, 'batch_size': 8, 'steps': 200000, 'mixed_precision': 'fp16', 'seed': 15, 'data_root': '/home/mli374/float/datasets', 'input_size': 512, 'dim_w': 512, 'dim_m': 20, 'dim_e': 7, 'fps': 25.0, 'wav2vec_sec': 2, 'num_prev_frames': 10, 'wandb_project': 'float-fmt', 'wandb_name': 'float_fmt_200000steps_1757825104', 'dataset_version': 'optimized', 'force_preprocess': False, 'cache_dir': '/tmp/float_cache', '_wandb': {}}
+2025-09-13 21:45:05,074 INFO    MainThread:3664082 [wandb_init.py:init():854] starting backend
+2025-09-13 21:45:05,320 INFO    MainThread:3664082 [wandb_init.py:init():857] sending inform_init request
+2025-09-13 21:45:05,372 WARNING MainThread:3664082 [wandb_init.py:init():1563] [no run ID] interrupted
+Traceback (most recent call last):
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/wandb/sdk/wandb_init.py", line 1554, in init
+    run = wi.init(run_settings, run_config, run_printer)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/wandb/sdk/wandb_init.py", line 859, in init
+    settings=settings.to_proto(),
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/wandb/sdk/wandb_settings.py", line 1928, in to_proto
+    for k, v in self.model_dump(exclude_none=True).items():
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/pydantic/main.py", line 426, in model_dump
+    return self.__pydantic_serializer__.to_python(
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/wandb/sdk/wandb_settings.py", line 1581, in _os
+    return platform.platform(aliased=True)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/platform.py", line 1207, in platform
+    platform = _platform(system, release, machine, processor,
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/platform.py", line 568, in _platform
+    cleaned = platform.replace('--', '-')
+KeyboardInterrupt
+2025-09-13 21:45:05,376 INFO    wandb-AsyncioManager-main:3664082 [service_client.py:_forward_responses():84] Reached EOF.
+2025-09-13 21:45:05,376 INFO    wandb-AsyncioManager-main:3664082 [mailbox.py:close():137] Closing mailbox, abandoning 0 handles.
