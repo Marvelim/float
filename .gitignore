@@ -8,5 +8,14 @@ tmp/
 *.mp4
 *.zip
 *.wav
+*.avi
+*.mov
+*.mkv
+*.tar.gz
+*.tar
+*.rar
+*.7z
+datasets/ravdess_raw/*.zip
+datasets/ravdess_raw/*.tar.gz
 wav2vec2-base-960h/
 wav2vec-english-speech-emotion-recognition/
