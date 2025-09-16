@@ -142,7 +142,7 @@ def main(opt: argparse.Namespace):
         train=True,
         opt=opt,
         cache_dir=getattr(opt, 'cache_dir', None),  # 可通过命令行参数指定缓存目录
-        force_preprocess=getattr(opt, 'force_preprocess', False)  # 可通过命令行参数控制
+        force_preprocess=False  # 假设缓存已经预处理好了
     )
 
     # 获取数据集实例进行健壮性检查
@@ -181,12 +181,13 @@ def main(opt: argparse.Namespace):
     # print("开始训练 FLOAT 模型...")
     # print(f"设备: {accelerator.device}")
     # print(f"模型参数量: {sum(p.numel() for p in model.parameters()):,}")
-    
+    cur_step = 0
     with tqdm(range(n_steps), dynamic_ncols=True) as pbar:
         pbar.set_description("Training")
         model.train()
         
         for step in pbar:
+            cur_step += 1
             # 获取数据
             # print("获取数据")
             try:
@@ -257,14 +258,14 @@ def main(opt: argparse.Namespace):
             # 更新进度条
             pbar.set_postfix({
                 'loss': f'{loss.item():.6f}',
-                'avg_loss': f'{losses / global_step:.6f}'
+                'avg_loss': f'{losses / cur_step:.6f}'
             })
             
             # 记录 wandb 日志
             if accelerator.is_main_process and not getattr(opt, 'disable_wandb', False):
                 wandb.log({
                     "train/loss": loss.item(),
-                    "train/avg_loss": losses / global_step,
+                    "train/avg_loss": losses / cur_step,
                     "train/learning_rate": optimizer.param_groups[0]['lr'],
                     "train/global_step": global_step,
                 }, step=global_step)
@@ -277,15 +278,15 @@ def main(opt: argparse.Namespace):
                 log_message = (
                     f'{current_time}\n'
                     f'Global Step: {global_step}\n'
-                    f'Loss: {losses / opt.log_step:.6f}\n'
+                    f'Loss: {losses / cur_step:.6f}\n'
                     f'Learning Rate: {lr:.6f}\n'
                     f'{"="*50}\n'
                 )
                 
                 with open('training_log.txt', mode='a') as f:
                     f.write(log_message)
-                
                 losses = 0.0
+                cur_step = 0
             
             # 生成样本
             if global_step % opt.sample_step == 0 and accelerator.is_main_process:

@@ -1,0 +1,65 @@
+使用优化版本的数据集 (dataset_test.py)...
+LOAD cache
+Preprocessing data...
+Cache cleared: /home/mli374/float/datasets/cache
+Using device for preprocessing: cuda
+Initializing models for preprocessing...
+Some weights of the model checkpoint at /home/mli374/float/checkpoints/wav2vec2-base-960h were not used when initializing Wav2VecModel: ['lm_head.weight', 'lm_head.bias']
+- This IS expected if you are initializing Wav2VecModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing Wav2VecModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of Wav2VecModel were not initialized from the model checkpoint at /home/mli374/float/checkpoints/wav2vec2-base-960h and are newly initialized: ['wav2vec2.masked_spec_embed']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Loading motion_autoencoder weights from float.pth...
+/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/_utils.py:776: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+Successfully loaded 177 motion_autoencoder parameters
+Preprocessing 120 samples...
+CUDA optimizations enabled
+Preprocessing:   0%|                                                               | 0/120 [00:00<?, ?it/s]
+Traceback (most recent call last):
+  File "train.py", line 363, in <module>
+    main(args)
+  File "train.py", line 138, in main
+    train_dataloader = create_dataloader_optimized(
+  File "/home/mli374/float/training/dataset_test.py", line 459, in create_dataloader_optimized
+    dataset = FLOATDatasetOptimized(
+  File "/home/mli374/float/training/dataset_test.py", line 109, in __init__
+    self.preprocessed_data = self._preprocess_all_data()
+  File "/home/mli374/float/training/dataset_test.py", line 231, in _preprocess_all_data
+    audio = self._load_audio(data_item['audio_path'], wav2vec_preprocessor)
+  File "/home/mli374/float/training/dataset_test.py", line 332, in _load_audio
+    speech_array, sampling_rate = librosa.load(audio_path, sr=self.opt.sampling_rate)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/lazy_loader/__init__.py", line 83, in __getattr__
+    attr = getattr(submod, name)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/lazy_loader/__init__.py", line 82, in __getattr__
+    submod = importlib.import_module(submod_path)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/importlib/__init__.py", line 127, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "<frozen importlib._bootstrap>", line 1014, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 991, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 975, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 671, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 783, in exec_module
+  File "<frozen importlib._bootstrap>", line 219, in _call_with_frames_removed
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/librosa/core/audio.py", line 14, in <module>
+    import scipy.signal
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/scipy/signal/__init__.py", line 331, in <module>
+    from ._peak_finding import *
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/scipy/signal/_peak_finding.py", line 8, in <module>
+    from scipy.stats import scoreatpercentile
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/scipy/stats/__init__.py", line 485, in <module>
+    from ._stats_py import *
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/scipy/stats/_stats_py.py", line 46, in <module>
+    from . import distributions
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/scipy/stats/distributions.py", line 11, in <module>
+    from . import _discrete_distns
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/scipy/stats/_discrete_distns.py", line 1530, in <module>
+    yulesimon = yulesimon_gen(name='yulesimon', a=1)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/scipy/stats/_distn_infrastructure.py", line 3212, in __init__
+    self._attach_methods()
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/scipy/stats/_distn_infrastructure.py", line 3229, in _attach_methods
+    self._attach_argparser_methods()
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/scipy/stats/_distn_infrastructure.py", line 669, in _attach_argparser_methods
+    exec(self._parse_arg_template, ns)
+  File "<string>", line 2, in <module>
+KeyboardInterrupt

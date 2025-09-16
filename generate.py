@@ -27,7 +27,7 @@ class DataProcessor:
 		# wav2vec2 audio preprocessor
 		self.wav2vec_preprocessor = Wav2Vec2FeatureExtractor.from_pretrained(opt.wav2vec_model_path, local_files_only=True)
 
-		# image transform 
+		# image transform
 		self.transform = A.Compose([
 				A.Resize(height=opt.input_size, width=opt.input_size, interpolation=cv2.INTER_AREA),
 				A.Normalize(mean=(0.5,0.5,0.5), std=(0.5,0.5,0.5)),
@@ -38,7 +38,7 @@ class DataProcessor:
 	def process_img(self, img:np.ndarray) -> np.ndarray:
 		mult = 360. / img.shape[0]
 
-		resized_img = cv2.resize(img, dsize=(0, 0), fx = mult, fy = mult, interpolation=cv2.INTER_AREA if mult < 1. else cv2.INTER_CUBIC)        
+		resized_img = cv2.resize(img, dsize=(0, 0), fx = mult, fy = mult, interpolation=cv2.INTER_AREA if mult < 1. else cv2.INTER_CUBIC)
 		bboxes = self.fa.face_detector.detect_from_image(resized_img)
 		bboxes = [(int(x1 / mult), int(y1 / mult), int(x2 / mult), int(y2 / mult), score) for (x1, y1, x2, y2, score) in bboxes if score > 0.95]
 		bboxes = bboxes[0] # Just use first bbox
@@ -47,11 +47,11 @@ class DataProcessor:
 		bsx = int((bboxes[2] - bboxes[0]) / 2)
 		my  = int((bboxes[1] + bboxes[3]) / 2)
 		mx  = int((bboxes[0] + bboxes[2]) / 2)
-		
+
 		bs = int(max(bsy, bsx) * 1.6)
 		img = cv2.copyMakeBorder(img, bs, bs, bs, bs, cv2.BORDER_CONSTANT, value=0)
 		my, mx  = my + bs, mx + bs  	# BBox center y, bbox center x
-		
+
 		crop_img = img[my - bs:my + bs,mx - bs:mx + bs]
 		crop_img = cv2.resize(crop_img, dsize = (self.input_size, self.input_size), interpolation = cv2.INTER_AREA if mult < 1. else cv2.INTER_CUBIC)
 		return crop_img
@@ -79,7 +79,7 @@ class InferenceAgent:
 		torch.cuda.empty_cache()
 		self.opt = opt
 		self.rank = opt.rank
-		
+
 		# Load Model
 		self.load_model()
 		self.load_weight(opt.ckpt_path, rank=self.rank)
@@ -173,7 +173,7 @@ class InferenceOptions(BaseOptions):
 		parser.add_argument('--res_video_path',
 				default=None, type=str, help='res video path')
 		parser.add_argument('--ckpt_path',
-				default="/home/nvadmin/workspace/taek/float-pytorch/checkpoints/float.pth", type=str, help='checkpoint path')
+				default="./checkpoints/float.pth", type=str, help='checkpoint path')
 		parser.add_argument('--res_dir',
 				default="./results", type=str, help='result dir')
 		return parser

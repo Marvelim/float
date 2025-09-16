@@ -83,8 +83,10 @@ class FLOATDatasetOptimized(Dataset):
         # 设置缓存目录
         if cache_dir is None:
             self.cache_dir = self.data_root / "cache"
+            print("LOAD cache")
         else:
             self.cache_dir = Path(cache_dir)
+            print("FAILED LOAD cache")
         self.cache_dir.mkdir(exist_ok=True)
         
         # 情感标签映射
@@ -97,13 +99,16 @@ class FLOATDatasetOptimized(Dataset):
         split_name = "train" if train else "test"
         self.cache_file = self.cache_dir / f"preprocessed_{split_name}.pkl"
         
+        print("cache_file: ", self.cache_file)
         # 加载或创建预处理数据
         if self.cache_file.exists() and not force_preprocess:
             print(f"Loading preprocessed data from {self.cache_file}")
             self.preprocessed_data = self._load_cache()
         else:
+            # assert (False)
             print("Preprocessing data...")
-            clear_cache(self.data_root, self.cache_dir)
+            # 只清除当前数据集的缓存文件，而不是整个目录
+            clear_cache(self.data_root, self.cache_dir, self.cache_file.name)
             self.preprocessed_data = self._preprocess_all_data()
             self._save_cache()
         
@@ -170,14 +175,19 @@ class FLOATDatasetOptimized(Dataset):
         Returns:
             预处理后的数据列表
         """
+        # 设置设备
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        print(f"Using device for preprocessing: {device}")
+
         # 初始化模型（仅在预处理时使用）
         print("Initializing models for preprocessing...")
         motion_autoencoder = Generator(
             size=self.opt.input_size,
             style_dim=self.opt.dim_w,
             motion_dim=self.opt.dim_m
-        )
-        audio_encoder = AudioEncoder(self.opt)
+        ).to(device)  # 移动到CUDA
+
+        audio_encoder = AudioEncoder(self.opt).to(device)  # 移动到CUDA
         wav2vec_preprocessor = Wav2Vec2FeatureExtractor.from_pretrained(
             self.opt.wav2vec_model_path,
             local_files_only=True
@@ -186,7 +196,7 @@ class FLOATDatasetOptimized(Dataset):
         # 加载预训练权重到 motion_autoencoder
         print("Loading motion_autoencoder weights from float.pth...")
         checkpoint_path = "/home/mli374/float/checkpoints/float.pth"
-        state_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+        state_dict = torch.load(checkpoint_path, map_location=device, weights_only=True)  # 直接加载到CUDA
 
         with torch.no_grad():
             # 加载 motion_autoencoder 权重
@@ -209,8 +219,14 @@ class FLOATDatasetOptimized(Dataset):
         # 获取原始数据列表
         raw_data_list = self._load_data_list()
         preprocessed_data = []
-        
+
         print(f"Preprocessing {len(raw_data_list)} samples...")
+
+        # 启用CUDA优化
+        if device.type == 'cuda':
+            torch.backends.cudnn.benchmark = True  # 优化卷积性能
+            print("CUDA optimizations enabled")
+
         for data_item in tqdm(raw_data_list, desc="Preprocessing"):
             try:
                 # 加载视频和音频
@@ -224,25 +240,23 @@ class FLOATDatasetOptimized(Dataset):
                     print(f"Skipping {data_item['video_path']}: insufficient frames ({num_frames})")
                     continue
                 
-                # 音频编码（预处理）
-                device = next(audio_encoder.parameters()).device
+                # 音频编码（预处理）- 使用CUDA加速
                 audio = audio.to(device)
                 with torch.no_grad():
                     w_audio = audio_encoder.inference(audio, seq_len=num_frames).squeeze(0)
-                
-                # 运动潜在表示提取（预处理）
-                device = next(motion_autoencoder.parameters()).device
+
+                # 运动潜在表示提取（预处理）- 使用CUDA加速
                 video_frames = video_frames.to(device)
                 with torch.no_grad():
                     motion_latents = self._extract_motion_latent_batch(motion_autoencoder, video_frames)
-                
-                # 参考运动提取
+
+                # 参考运动提取 - 使用CUDA加速
                 reference_frame = video_frames[0:1]
                 with torch.no_grad():
                     reference_motion = self._extract_motion_latent_batch(motion_autoencoder, reference_frame).squeeze(0)
-                
-                # 情感特征
-                emotion_features = F.one_hot(torch.tensor(data_item['emotion']), num_classes=self.opt.dim_e)
+
+                # 情感特征 - 移动到CUDA
+                emotion_features = F.one_hot(torch.tensor(data_item['emotion']), num_classes=self.opt.dim_e).to(device)
                 
                 # 存储预处理结果（移回CPU以节省GPU内存）
                 preprocessed_item = {
@@ -251,17 +265,28 @@ class FLOATDatasetOptimized(Dataset):
                     'audio_latents': w_audio.cpu(),  # (T, audio_dim)
                     'reference_frame': video_frames[0].cpu(),  # (C, H, W)
                     'reference_motion': reference_motion.cpu(),  # (motion_dim,)
-                    'emotion_features': emotion_features,
+                    'emotion_features': emotion_features.cpu(),  # 移回CPU
                     'actor_id': data_item['actor_id'],
                     'num_frames': num_frames,
                 }
                 
                 preprocessed_data.append(preprocessed_item)
-                
+
+                # 定期清理CUDA缓存以防止内存溢出
+                if device.type == 'cuda' and len(preprocessed_data) % 10 == 0:
+                    torch.cuda.empty_cache()
+
             except Exception as e:
                 print(f"Error processing {data_item['video_path']}: {e}")
+                # 清理CUDA缓存以防止内存泄漏
+                if device.type == 'cuda':
+                    torch.cuda.empty_cache()
                 continue
-        
+
+        # 最终清理
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+
         print(f"Successfully preprocessed {len(preprocessed_data)} samples")
         return preprocessed_data
 
@@ -362,6 +387,8 @@ class FLOATDatasetOptimized(Dataset):
     def _save_cache(self):
         """保存预处理缓存"""
         print(f"Saving preprocessed data to {self.cache_file}")
+        # 确保缓存目录存在
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         with open(self.cache_file, 'wb') as f:
             pickle.dump(self.preprocessed_data, f)
 
@@ -453,25 +480,36 @@ def create_dataloader_optimized(data_root: str,
 
 
 # 工具函数：清理缓存
-def clear_cache(data_root: str, cache_dir: str = None):
+def clear_cache(data_root: str, cache_dir: str = None, specific_file: str = None):
     """
     清理预处理缓存
 
     Args:
         data_root: 数据根目录
         cache_dir: 缓存目录
+        specific_file: 特定文件（如 'preprocessed_train.pkl'），如果为None则清除整个目录
     """
     if cache_dir is None:
         cache_dir = Path(data_root) / "cache"
     else:
         cache_dir = Path(cache_dir)
 
-    if cache_dir.exists():
-        import shutil
-        shutil.rmtree(cache_dir)
-        print(f"Cache cleared: {cache_dir}")
+    if specific_file:
+        # 只删除特定文件
+        file_path = cache_dir / specific_file
+        if file_path.exists():
+            file_path.unlink()
+            print(f"Cache file cleared: {file_path}")
+        else:
+            print(f"Cache file does not exist: {file_path}")
     else:
-        print(f"Cache directory does not exist: {cache_dir}")
+        # 删除整个目录（原有逻辑）
+        if cache_dir.exists():
+            import shutil
+            shutil.rmtree(cache_dir)
+            print(f"Cache cleared: {cache_dir}")
+        else:
+            print(f"Cache directory does not exist: {cache_dir}")
 
 
 # 工具函数：检查缓存状态

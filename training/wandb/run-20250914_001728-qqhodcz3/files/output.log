@@ -1,0 +1,54 @@
+使用优化版本的数据集 (dataset_test.py)...
+Preprocessing data...
+Cache cleared: /home/mli374/float/datasets/cache
+Initializing models for preprocessing...
+Some weights of the model checkpoint at /home/mli374/float/checkpoints/wav2vec2-base-960h were not used when initializing Wav2VecModel: ['lm_head.weight', 'lm_head.bias']
+- This IS expected if you are initializing Wav2VecModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing Wav2VecModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of Wav2VecModel were not initialized from the model checkpoint at /home/mli374/float/checkpoints/wav2vec2-base-960h and are newly initialized: ['wav2vec2.masked_spec_embed']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Loading motion_autoencoder weights from float.pth...
+/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/_utils.py:776: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+Successfully loaded 177 motion_autoencoder parameters
+Preprocessing 120 samples...
+Preprocessing:   9%|████████▌                                                                                     | 11/120 [09:23<1:33:08, 51.27s/it]
+Traceback (most recent call last):
+  File "train.py", line 365, in <module>
+    main(args)
+  File "train.py", line 138, in main
+    train_dataloader = create_dataloader_optimized(
+  File "/home/mli374/float/training/dataset_test.py", line 437, in create_dataloader_optimized
+    num_workers: int = 4,
+  File "/home/mli374/float/training/dataset_test.py", line 107, in __init__
+    self.preprocessed_data = self._preprocess_all_data()
+  File "/home/mli374/float/training/dataset_test.py", line 242, in _preprocess_all_data
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/utils/_contextlib.py", line 115, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/mli374/float/training/dataset_test.py", line 334, in _extract_motion_latent_batch
+    return_tensors='pt'
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/mli374/float/models/float/encoder.py", line 284, in forward
+    h_source, feats = self.net_app(input_source)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/mli374/float/models/float/encoder.py", line 233, in forward
+    h = conv(h)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/mli374/float/models/float/encoder.py", line 190, in forward
+    out = self.conv2(out)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/container.py", line 217, in forward
+    input = module(input)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/mli374/float/models/float/encoder.py", line 52, in forward
+    out = fused_leaky_relu(input, self.bias, self.negative_slope, self.scale)
+  File "/home/mli374/float/models/float/encoder.py", line 9, in fused_leaky_relu
+    return F.leaky_relu(input + bias, negative_slope) * scale
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/functional.py", line 1632, in leaky_relu
+    result = torch._C._nn.leaky_relu(input, negative_slope)
+KeyboardInterrupt

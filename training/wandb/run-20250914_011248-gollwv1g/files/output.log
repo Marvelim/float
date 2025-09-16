@@ -1,0 +1,57 @@
+使用优化版本的数据集 (dataset_test.py)...
+Preprocessing data...
+Cache cleared: /home/mli374/float/datasets/cache
+Using device for preprocessing: cuda
+Initializing models for preprocessing...
+Some weights of the model checkpoint at /home/mli374/float/checkpoints/wav2vec2-base-960h were not used when initializing Wav2VecModel: ['lm_head.weight', 'lm_head.bias']
+- This IS expected if you are initializing Wav2VecModel from the checkpoint of a model trained on another task or with another architecture (e.g. initializing a BertForSequenceClassification model from a BertForPreTraining model).
+- This IS NOT expected if you are initializing Wav2VecModel from the checkpoint of a model that you expect to be exactly identical (initializing a BertForSequenceClassification model from a BertForSequenceClassification model).
+Some weights of Wav2VecModel were not initialized from the model checkpoint at /home/mli374/float/checkpoints/wav2vec2-base-960h and are newly initialized: ['wav2vec2.masked_spec_embed']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Loading motion_autoencoder weights from float.pth...
+/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/_utils.py:776: UserWarning: TypedStorage is deprecated. It will be removed in the future and UntypedStorage will be the only storage class. This should only matter to you if you are using storages directly.  To access UntypedStorage directly, use tensor.untyped_storage() instead of tensor.storage()
+  return self.fget.__get__(instance, owner)()
+Successfully loaded 177 motion_autoencoder parameters
+Preprocessing 120 samples...
+CUDA optimizations enabled
+Preprocessing:   0%|                                                               | 0/120 [00:07<?, ?it/s]
+Traceback (most recent call last):
+  File "train.py", line 363, in <module>
+    main(args)
+  File "train.py", line 138, in main
+    train_dataloader = create_dataloader_optimized(
+  File "/home/mli374/float/training/dataset_test.py", line 457, in create_dataloader_optimized
+    dataset = FLOATDatasetOptimized(
+  File "/home/mli374/float/training/dataset_test.py", line 107, in __init__
+    self.preprocessed_data = self._preprocess_all_data()
+  File "/home/mli374/float/training/dataset_test.py", line 246, in _preprocess_all_data
+    motion_latents = self._extract_motion_latent_batch(motion_autoencoder, video_frames)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/utils/_contextlib.py", line 115, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/mli374/float/training/dataset_test.py", line 354, in _extract_motion_latent_batch
+    d_r, r_d_lambda, _ = motion_autoencoder.enc(video_frames, input_target=None)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/mli374/float/models/float/encoder.py", line 284, in forward
+    h_source, feats = self.net_app(input_source)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/mli374/float/models/float/encoder.py", line 233, in forward
+    h = conv(h)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/mli374/float/models/float/encoder.py", line 190, in forward
+    out = self.conv2(out)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/container.py", line 217, in forward
+    input = module(input)
+  File "/home/mli374/miniconda3/envs/FLOAT/lib/python3.8/site-packages/torch/nn/modules/module.py", line 1501, in _call_impl
+    return forward_call(*args, **kwargs)
+  File "/home/mli374/float/models/float/encoder.py", line 70, in forward
+    return upfirdn2d(input, self.kernel, pad=self.pad)
+  File "/home/mli374/float/models/float/encoder.py", line 33, in upfirdn2d
+    return upfirdn2d_native(input, kernel, up, up, down, down, pad[0], pad[1], pad[0], pad[1])
+  File "/home/mli374/float/models/float/encoder.py", line 26, in upfirdn2d_native
+    out = F.conv2d(out, w)
+KeyboardInterrupt

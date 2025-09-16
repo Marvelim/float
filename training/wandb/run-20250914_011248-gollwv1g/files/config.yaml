@@ -1,0 +1,137 @@
+_wandb:
+    value:
+        cli_version: 0.21.4
+        e:
+            6djsg21set0mmak5rp04ipjl3lgh96nh:
+                args:
+                    - --force_preprocess
+                    - --num_workers
+                    - "0"
+                codePath: training/train.py
+                codePathLocal: train.py
+                cpu_count: 64
+                cpu_count_logical: 64
+                cudaVersion: "12.6"
+                disk:
+                    /:
+                        total: "1889085706240"
+                        used: "1699909591040"
+                email: mingyulics@stu.pku.edu.cn
+                executable: /home/mli374/miniconda3/envs/FLOAT/bin/python
+                git:
+                    commit: 3fd67952b16925f6adea3b7384f12232549b013b
+                    remote: https://github.com/Marvelim/float.git
+                gpu: NVIDIA RTX A5000
+                gpu_count: 8
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 8192
+                      memoryTotal: "25757220864"
+                      name: NVIDIA RTX A5000
+                      uuid: GPU-0f0aadd5-3467-5ade-bb8e-65b51cbdb816
+                    - architecture: Ampere
+                      cudaCores: 8192
+                      memoryTotal: "25757220864"
+                      name: NVIDIA RTX A5000
+                      uuid: GPU-1faecaf8-ce04-c1b1-c540-855f50c97c22
+                    - architecture: Ampere
+                      cudaCores: 8192
+                      memoryTotal: "25757220864"
+                      name: NVIDIA RTX A5000
+                      uuid: GPU-6702a6b1-cf1b-fff7-a692-a00b497a9b21
+                    - architecture: Ampere
+                      cudaCores: 8192
+                      memoryTotal: "25757220864"
+                      name: NVIDIA RTX A5000
+                      uuid: GPU-e500394d-f845-8225-39ab-19802237fd8c
+                    - architecture: Ampere
+                      cudaCores: 8192
+                      memoryTotal: "25757220864"
+                      name: NVIDIA RTX A5000
+                      uuid: GPU-c641894b-f9ab-523a-1ec7-ad3bab2f8717
+                    - architecture: Ampere
+                      cudaCores: 8192
+                      memoryTotal: "25757220864"
+                      name: NVIDIA RTX A5000
+                      uuid: GPU-a0f9d137-9830-dd6a-7ba7-cb27ec98c008
+                    - architecture: Ampere
+                      cudaCores: 8192
+                      memoryTotal: "25757220864"
+                      name: NVIDIA RTX A5000
+                      uuid: GPU-1b54be21-ff96-5158-482d-e7ae15f3ba3e
+                    - architecture: Ampere
+                      cudaCores: 8192
+                      memoryTotal: "25757220864"
+                      name: NVIDIA RTX A5000
+                      uuid: GPU-c141691e-5fb0-d29a-253a-5a672ad896c9
+                host: vlaa-01
+                memory:
+                    total: "270298181632"
+                os: Linux-6.8.0-60-generic-x86_64-with-glibc2.10
+                program: train.py
+                python: CPython 3.8.5
+                root: /home/mli374/float/training
+                startedAt: "2025-09-14T08:12:48.603781Z"
+                writerId: 6djsg21set0mmak5rp04ipjl3lgh96nh
+        m: []
+        python_version: 3.8.5
+        t:
+            "1":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 63
+                - 71
+            "2":
+                - 1
+                - 11
+                - 41
+                - 49
+                - 53
+                - 63
+                - 71
+            "3":
+                - 13
+                - 16
+            "4": 3.8.5
+            "5": 0.21.4
+            "6": 4.30.2
+            "12": 0.21.4
+            "13": linux-x86_64
+batch_size:
+    value: 8
+cache_dir:
+    value: null
+data_root:
+    value: /home/mli374/float/datasets
+dataset_version:
+    value: optimized
+dim_e:
+    value: 7
+dim_m:
+    value: 20
+dim_w:
+    value: 512
+force_preprocess:
+    value: true
+fps:
+    value: 25
+input_size:
+    value: 512
+learning_rate:
+    value: 0.0001
+mixed_precision:
+    value: fp16
+num_prev_frames:
+    value: 10
+seed:
+    value: 15
+steps:
+    value: 200000
+wandb_name:
+    value: float_fmt_200000steps_1757837567
+wandb_project:
+    value: float-fmt
+wav2vec_sec:
+    value: 2
