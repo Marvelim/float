@@ -2,13 +2,13 @@
 
 # 设置要下载的模型仓库 ID
 # Set the repository ID of the model to be downloaded
-MODEL_ID="facebook/wav2vec2-base-960h"
+MODEL_ID="r-f/wav2vec-english-speech-emotion-recognition"
 
 # 设置你希望将模型文件保存到的本地目录
 # Set the local directory where you want to save the model files
 # 注意：如果目录不存在，huggingface-cli 会自动创建它
 # Note: huggingface-cli will create the directory if it doesn't exist
-LOCAL_DIR="./checkpoints/wav2vec2-base-960h"
+LOCAL_DIR="checkpoints/wav2vec-english-speech-emotion-recognition"
 
 # 打印开始信息
 # Print start message

@@ -12,6 +12,9 @@ from pathlib import Path
 from tqdm import tqdm
 import hashlib
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import threading
 import cv2
 import librosa
 import soundfile as sf
@@ -32,9 +35,11 @@ except ImportError:
 class RAVDESSDownloader:
     """RAVDESS数据集下载器"""
     
-    def __init__(self, data_dir="./ravdess_raw"):
+    def __init__(self, data_dir="./ravdess_raw", num_workers=1):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(exist_ok=True)
+        # 并行分块下载的线程数（仅用于单文件分块下载）
+        self.num_workers = max(1, int(num_workers))
         
         # RAVDESS官方下载链接
         self.download_urls = {
@@ -72,115 +77,322 @@ class RAVDESSDownloader:
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
     
-    def download_file(self, url, local_path, expected_md5=None, show_progress=True):
-        """下载文件并验证MD5"""
-        if show_progress:
-            print(f"下载: {url}")
-            print(f"保存到: {local_path}")
-        
-        try:
-            # 创建目录
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # 下载文件
-            def progress_hook(block_num, block_size, total_size):
-                if show_progress and total_size > 0:
-                    downloaded = block_num * block_size
-                    percent = min(100, downloaded * 100 / total_size)
-                    print(f"\r下载进度: {percent:.1f}% ({downloaded}/{total_size} bytes)", end="")
-            
-            urllib.request.urlretrieve(url, local_path, progress_hook if show_progress else None)
-            if show_progress:
-                print()  # 换行
-            
-            # 验证MD5
-            if expected_md5:
-                if show_progress:
-                    print("验证文件完整性...")
-                actual_md5 = self.calculate_md5(local_path)
-                if actual_md5 == expected_md5:
-                    if show_progress:
-                        print("✅ MD5验证通过")
-                    return True
+    def download_file(self, url, local_path, expected_md5=None, show_progress=True, use_parallel=False, pbar_position=None):
+        """下载文件并验证MD5。
+        - 默认串行下载，显示进度条、超时与重试。
+        - 当 use_parallel=True 且服务器支持 Range 时，启用分块并行下载以加速（仿照 HDTF 的并行思路）。
+        """
+        # 确保目录存在
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        tmp_path = local_path.with_suffix(local_path.suffix + ".part")
+        attempts = 3
+        for attempt in range(1, attempts + 1):
+            try:
+                # 如果要求并行，尝试 Range 支持
+                if use_parallel and self.num_workers > 1:
+                    parallel_ok = self._download_file_parallel(url, tmp_path, show_progress, pbar_position=pbar_position)
+                    if not parallel_ok:
+                        # 回退到串行
+                        self._download_file_serial(url, tmp_path, show_progress, pbar_position=pbar_position)
                 else:
+                    self._download_file_serial(url, tmp_path, show_progress, pbar_position=pbar_position)
+                # 原子替换
+                tmp_path.replace(local_path)
+
+                # 验证MD5
+                if expected_md5:
+                    actual_md5 = self.calculate_md5(local_path)
+                    if actual_md5 != expected_md5:
+                        # 删除错误文件，重试
+                        try:
+                            local_path.unlink(missing_ok=True)
+                        except TypeError:
+                            if local_path.exists():
+                                local_path.unlink()
+                        raise IOError("MD5 mismatch")
+                return True
+            except Exception as e:
+                if show_progress:
+                    print(f"第 {attempt}/{attempts} 次下载失败: {e}")
+                time.sleep(2 * attempt)
+        # 清理临时文件
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except TypeError:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        return False
+
+    def _download_file_serial(self, url, tmp_path: Path, show_progress: bool, pbar_position=None):
+        with urllib.request.urlopen(url, timeout=120) as resp:
+            total = resp.getheader('Content-Length')
+            total = int(total) if total is not None else None
+            desc = f"下载 {tmp_path.stem}"
+            with open(tmp_path, 'wb') as out, \
+                 tqdm(total=total, unit='B', unit_scale=True, unit_divisor=1024,
+                      disable=not show_progress, desc=desc, position=(pbar_position or 0), leave=True) as pbar:
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
                     if show_progress:
-                        print(f"❌ MD5验证失败")
-                        print(f"期望: {expected_md5}")
-                        print(f"实际: {actual_md5}")
-                    return False
-            
-            return True
-            
-        except Exception as e:
-            if show_progress:
-                print(f"❌ 下载失败: {e}")
+                        pbar.update(len(chunk))
+
+    def _head_content_info(self, url):
+        try:
+            req = urllib.request.Request(url, method='HEAD')
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                cl = resp.getheader('Content-Length')
+                ar = resp.getheader('Accept-Ranges')
+                return (int(cl) if cl is not None else None, (ar or '').lower())
+        except Exception:
+            return (None, '')
+
+    def _download_file_parallel(self, url, tmp_path: Path, show_progress: bool, pbar_position=None) -> bool:
+        total, accept_ranges = self._head_content_info(url)
+        if total is None or 'bytes' not in accept_ranges:
             return False
+
+        part_count = min(self.num_workers, 8)  # 保守上限
+        part_size = total // part_count
+        ranges = []
+        start = 0
+        for i in range(part_count):
+            end = start + part_size - 1 if i < part_count - 1 else total - 1
+            ranges.append((i, start, end))
+            start = end + 1
+
+        # 每个分片下载到独立文件后合并
+        tmp_dir = tmp_path.parent
+        pbar = tqdm(total=total, unit='B', unit_scale=True, unit_divisor=1024,
+                    disable=not show_progress, desc=f"下载 {tmp_path.stem} (并行)", position=(pbar_position or 0), leave=True)
+        lock = threading.Lock()
+        errors = []
+
+        def download_part(idx, s, e):
+            headers = {"Range": f"bytes={s}-{e}"}
+            req = urllib.request.Request(url, headers=headers)
+            part_file = tmp_dir / f"{tmp_path.name}.part{idx}"
+            try:
+                with urllib.request.urlopen(req, timeout=120) as resp, open(part_file, 'wb') as out:
+                    while True:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        if show_progress:
+                            with lock:
+                                pbar.update(len(chunk))
+            except Exception as e:
+                errors.append((idx, str(e)))
+
+        threads = []
+        for i, s, e in ranges:
+            t = threading.Thread(target=download_part, args=(i, s, e), daemon=True)
+            threads.append(t)
+            t.start()
+        for t in threads:
+            t.join()
+        pbar.close()
+
+        if errors:
+            # 清理分片
+            for i, _, _ in ranges:
+                part_file = tmp_dir / f"{tmp_path.name}.part{i}"
+                if part_file.exists():
+                    part_file.unlink()
+            raise IOError(f"并行下载失败: {errors[:1][0][1]}")
+
+        # 合并
+        with open(tmp_path, 'wb') as out:
+            for i, _, _ in ranges:
+                part_file = tmp_dir / f"{tmp_path.name}.part{i}"
+                with open(part_file, 'rb') as pf:
+                    shutil.copyfileobj(pf, out)
+                part_file.unlink()
+        return True
     
     def extract_zip(self, zip_path, extract_to, show_progress=True):
-        """解压ZIP文件"""
-        if show_progress:
-            print(f"解压: {zip_path.name}")
-        
+        """解压ZIP文件（显示条目进度）"""
         try:
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_to)
-                if show_progress:
-                    print("✅ 解压完成")
+                members = zip_ref.infolist()
+                desc = f"解压 {zip_path.name}"
+                with tqdm(total=len(members), unit='file', disable=not show_progress, desc=desc) as pbar:
+                    for m in members:
+                        zip_ref.extract(m, extract_to)
+                        if show_progress:
+                            pbar.update(1)
                 return True
         except Exception as e:
             if show_progress:
                 print(f"❌ 解压失败: {e}")
             return False
     
-    def download_and_extract(self, file_keys, force_download=False):
-        """下载并解压指定的文件"""
-        success_count = 0
-        total_count = len(file_keys)
-        
-        for file_key in file_keys:
-            if file_key not in self.download_urls:
+    def _download_and_extract_one(self, file_key, force_download=False, verbose=True):
+        if file_key not in self.download_urls:
+            if verbose:
                 print(f"❌ 未知的文件: {file_key}")
-                continue
-                
-            file_info = self.download_urls[file_key]
-            zip_path = self.data_dir / file_key
-            
+            return False
+
+        file_info = self.download_urls[file_key]
+        zip_path = self.data_dir / file_key
+
+        if verbose:
             print(f"\n{'='*60}")
             print(f"处理文件: {file_key}")
             print(f"{'='*60}")
-            
-            # 检查文件是否已存在
-            if zip_path.exists() and not force_download:
-                if file_info.get("md5"):
-                    if self.calculate_md5(zip_path) == file_info["md5"]:
+
+        # 检查文件是否已存在
+        if zip_path.exists() and not force_download:
+            if file_info.get("md5"):
+                if self.calculate_md5(zip_path) == file_info["md5"]:
+                    if verbose:
                         print("✅ 文件已存在且完整，跳过下载")
-                    else:
-                        print("❌ 文件存在但不完整，重新下载")
-                        zip_path.unlink()
                 else:
-                    print("✅ 文件已存在，跳过下载")
-            
-            # 下载文件
-            if not zip_path.exists():
-                success = self.download_file(
-                    file_info["url"], 
-                    zip_path, 
-                    file_info.get("md5")
-                )
-                
-                if not success:
-                    print(f"❌ {file_key} 下载失败")
-                    continue
-            
-            # 解压文件
-            extract_success = self.extract_zip(zip_path, self.data_dir)
-            
-            if extract_success:
-                success_count += 1
-                print(f"✅ {file_key} 处理完成")
+                    if verbose:
+                        print("❌ 文件存在但不完整，重新下载")
+                    zip_path.unlink()
             else:
+                if verbose:
+                    print("✅ 文件已存在，跳过下载")
+
+        # 下载文件
+        if not zip_path.exists():
+            success = self.download_file(
+                file_info["url"],
+                zip_path,
+                file_info.get("md5"),
+                show_progress=verbose and self.num_workers == 1,
+            )
+            if not success:
+                if verbose:
+                    print(f"❌ {file_key} 下载失败")
+                return False
+
+        # 解压文件
+        extract_success = self.extract_zip(zip_path, self.data_dir, show_progress=verbose)
+        if extract_success:
+            if verbose:
+                print(f"✅ {file_key} 处理完成")
+            return True
+        else:
+            if verbose:
                 print(f"❌ {file_key} 解压失败")
-        
+            return False
+
+    def download_and_extract(self, file_keys, force_download=False):
+        """下载并解压指定的文件。
+        - 当 num_workers <= 1：串行下载 + 条目进度。
+        - 当 num_workers > 1：多文件并行下载（外层进度条），随后串行解压（带条目进度）。
+        """
+        total_count = len(file_keys)
+
+        # 串行路径
+        if self.num_workers <= 1:
+            success_count = 0
+            for file_key in file_keys:
+                if file_key not in self.download_urls:
+                    print(f"❌ 未知的文件: {file_key}")
+                    continue
+                file_info = self.download_urls[file_key]
+                zip_path = self.data_dir / file_key
+
+                print(f"\n{'='*60}")
+                print(f"处理文件: {file_key}")
+                print(f"{'='*60}")
+
+                # 已存在处理
+                if zip_path.exists() and not force_download:
+                    if file_info.get("md5"):
+                        if self.calculate_md5(zip_path) == file_info["md5"]:
+                            print("✅ 文件已存在且完整，跳过下载")
+                        else:
+                            print("❌ 文件存在但不完整，重新下载")
+                            zip_path.unlink()
+                    else:
+                        # 无MD5的视频ZIP，做有效性校验
+                        if not zipfile.is_zipfile(zip_path):
+                            print("⚠️  现有文件不是有效的ZIP，重新下载")
+                            zip_path.unlink()
+                        else:
+                            print("✅ 文件已存在，跳过下载")
+
+                # 下载（串行，显示进度）
+                if not zip_path.exists():
+                    ok = self.download_file(file_info["url"], zip_path, file_info.get("md5"), show_progress=True, use_parallel=False, pbar_position=0)
+                    if not ok:
+                        print(f"❌ {file_key} 下载失败")
+                        continue
+
+                # 解压
+                if self.extract_zip(zip_path, self.data_dir, show_progress=True):
+                    success_count += 1
+                    print(f"✅ {file_key} 处理完成")
+                else:
+                    print(f"❌ {file_key} 解压失败")
+
+            print(f"\n总结: {success_count}/{total_count} 个文件处理成功")
+            return success_count == total_count
+
+        # 多文件并行下载
+        print(f"并行下载启用：num_workers={self.num_workers}")
+        dl_results = {}
+
+        def download_worker(k, pos):
+            if k not in self.download_urls:
+                return (k, False)
+            info = self.download_urls[k]
+            zp = self.data_dir / k
+            # 已存在处理
+            if zp.exists() and not force_download:
+                if info.get("md5"):
+                    if self.calculate_md5(zp) == info["md5"]:
+                        return (k, True)
+                    else:
+                        try:
+                            zp.unlink()
+                        except Exception:
+                            pass
+                else:
+                    # 无MD5的视频ZIP，做有效性校验
+                    if zipfile.is_zipfile(zp):
+                        return (k, True)
+                    else:
+                        try:
+                            zp.unlink()
+                        except Exception:
+                            pass
+            ok = self.download_file(info["url"], zp, info.get("md5"), show_progress=True, use_parallel=False, pbar_position=pos)
+            return (k, ok)
+
+        with ThreadPoolExecutor(max_workers=self.num_workers) as ex:
+            futures = {}
+            for idx, k in enumerate(file_keys):
+                pos = (idx % self.num_workers)
+                futures[ex.submit(download_worker, k, pos)] = k
+            with tqdm(total=len(futures), desc='下载文件', unit='file', position=self.num_workers, leave=True) as pbar:
+                for fut in as_completed(futures):
+                    k, ok = fut.result()
+                    dl_results[k] = ok
+                    pbar.update(1)
+
+        # 串行解压
+        success_count = 0
+        for k in file_keys:
+            if not dl_results.get(k, False):
+                print(f"跳过解压（下载失败或文件缺失）: {k}")
+                continue
+            zp = self.data_dir / k
+            print(f"开始解压: {k}")
+            if self.extract_zip(zp, self.data_dir, show_progress=True):
+                success_count += 1
+                print(f"✅ 解压完成: {k}")
+            else:
+                print(f"❌ 解压失败: {k}")
+
         print(f"\n总结: {success_count}/{total_count} 个文件处理成功")
         return success_count == total_count
 
@@ -189,23 +401,47 @@ class RAVDESSPreprocessor:
     """RAVDESS数据预处理器"""
     
     def __init__(self, raw_dir="./ravdess_raw", processed_dir="./ravdess_processed", 
-                 target_fps=25, target_sr=16000, target_size=512):
+                 target_fps=25, target_sr=16000, target_size=512, use_face_alignment=True, fa_init_timeout=10):
         self.raw_dir = Path(raw_dir)
         self.processed_dir = Path(processed_dir)
         self.target_fps = target_fps
         self.target_sr = target_sr
         self.target_size = target_size
         
-        # 初始化人脸检测器
-        try:
-            self.fa = face_alignment.FaceAlignment(
-                face_alignment.LandmarksType.TWO_D, 
-                flip_input=False,
-                    device='cuda' if os.system('nvidia-smi') == 0 else 'cpu'
-                )
-        except Exception as e:
-            print(f"Warning: Could not initialize face alignment: {e}")
-            self.fa = None
+        # 初始化人脸检测器（可禁用，并带超时避免卡死）
+        self.fa = None
+        if use_face_alignment:
+            try:
+                import threading
+                _fa_holder = {}
+                def _init_fa():
+                    try:
+                        # 使用GPU 4-7中的第一个可用GPU
+                        import torch
+                        if torch.cuda.is_available() and torch.cuda.device_count() > 4:
+                            device = 'cuda:4'  # 使用GPU 4
+                        else:
+                            device = 'cpu'
+                        _fa_holder['fa'] = face_alignment.FaceAlignment(
+                            face_alignment.LandmarksType.TWO_D,
+                            flip_input=False,
+                            device=device
+                        )
+                    except Exception as ie:
+                        _fa_holder['err'] = ie
+                t = threading.Thread(target=_init_fa, daemon=True)
+                t.start()
+                t.join(timeout=max(1, int(fa_init_timeout)))
+                if t.is_alive():
+                    print("Warning: face_alignment init timeout, fallback to center crop.")
+                else:
+                    if 'err' in _fa_holder:
+                        print(f"Warning: Could not initialize face alignment: {_fa_holder['err']}")
+                    else:
+                        self.fa = _fa_holder.get('fa')
+            except Exception as e:
+                print(f"Warning: face_alignment setup failed: {e}")
+                self.fa = None
     
     def get_crop_params_like_generate(self, img):
         """按照generate.py中process_img的方式计算裁剪参数"""
@@ -495,7 +731,7 @@ class RAVDESSPreprocessor:
                     continue
                 
                 # 设置输出路径
-                output_dir = self.processed_dir / "test" / f"Actor_{actor_id:02d}"
+                output_dir = self.processed_dir / f"Actor_{actor_id:02d}"
                 output_video_path = output_dir / f"{video_file.stem}_processed.mp4"
                 
                 # 检查是否已处理
@@ -529,7 +765,8 @@ def main():
     parser = argparse.ArgumentParser(description='RAVDESS 数据集下载和预处理')
     parser.add_argument('--download', action='store_true', help='下载数据集')
     parser.add_argument('--preprocess', action='store_true', help='预处理数据集')
-    parser.add_argument('--actors', type=str, default='23,24', 
+    parser.add_argument('--actors', type=str, default=
+    '1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24', 
                        help='要处理的Actor ID (逗号分隔，例如: 1,2,3 或 23,24)')
     parser.add_argument('--modalities', type=str, default='speech',
                        choices=['speech', 'song', 'both'], help='要处理的模态')
@@ -540,6 +777,9 @@ def main():
     parser.add_argument('--force_download', action='store_true', help='强制重新下载')
     parser.add_argument('--raw_dir', type=str, default='./ravdess_raw', help='原始数据目录')
     parser.add_argument('--processed_dir', type=str, default='./ravdess_processed', help='处理后数据目录')
+    parser.add_argument('--num_workers', type=int, default=1, help='下载并行线程数（建议 2-8）')
+    parser.add_argument('--no_face', action='store_true', help='预处理时禁用人脸检测，使用中心裁剪（避免卡住）')
+    parser.add_argument('--fa_init_timeout', type=int, default=10, help='人脸检测初始化超时（秒），超过则回退中心裁剪')
     
     args = parser.parse_args()
     
@@ -556,7 +796,7 @@ def main():
         modalities = [args.modalities]
     
     # 初始化下载器
-    downloader = RAVDESSDownloader(args.raw_dir)
+    downloader = RAVDESSDownloader(args.raw_dir, num_workers=args.num_workers)
     
     # 下载文件
     if args.download:
@@ -594,7 +834,9 @@ def main():
     
     # 预处理数据
     if args.preprocess:
-        preprocessor = RAVDESSPreprocessor(args.raw_dir, args.processed_dir)
+        preprocessor = RAVDESSPreprocessor(args.raw_dir, args.processed_dir,
+                                           use_face_alignment=(not args.no_face),
+                                           fa_init_timeout=args.fa_init_timeout)
         success_count, failed_count = preprocessor.preprocess_dataset(actor_ids, modalities)
         
         if failed_count == 0:

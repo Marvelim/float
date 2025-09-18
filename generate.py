@@ -66,11 +66,17 @@ class DataProcessor:
 
 
 	def preprocess(self, ref_path:str, audio_path:str, no_crop:bool) -> dict:
+		print(f"ref_path: {ref_path}")
+		print(f"audio_path: {audio_path}")
+		print(f"no_crop: {no_crop}")
 		s = self.default_img_loader(ref_path)
 		if not no_crop:
 			s = self.process_img(s)
+		print("process_img done")
 		s = self.transform(image=s)['image'].unsqueeze(0)
 		a = self.default_aud_loader(audio_path).unsqueeze(0)
+		print("default_aud_loader done")
+		print("preprocess done")
 		return {'s': s, 'a': a, 'p': None, 'e': None}
 
 
