@@ -8,7 +8,7 @@ class BaseOptions():
 		return self.opt
 
 	def initialize(self, parser):
-		parser.add_argument('--pretrained_dir', type=str, default='./checkpoints')
+		parser.add_argument('--pretrained_dir', type=str, default='/home/mli374/float/checkpoints')
 		parser.add_argument('--seed', default=15, type=int)
 		parser.add_argument('--fix_noise_seed', action='store_true')
 
@@ -21,8 +21,8 @@ class BaseOptions():
 		parser.add_argument('--sampling_rate', type=int, default=16000)
 		parser.add_argument('--audio_marcing', type=int, default=2, help='number of adjacent frames. For value v, t -> [t-v, ..., t, ..., t+v]')        
 		parser.add_argument('--wav2vec_sec', default=2, type=float, help='window length L (seconds), 50 frames')
-		parser.add_argument('--wav2vec_model_path', default='./checkpoints/wav2vec2-base-960h')
-		parser.add_argument('--audio2emotion_path', default='./checkpoints/wav2vec-english-speech-emotion-recognition')
+		parser.add_argument('--wav2vec_model_path', default='/home/mli374/float/checkpoints/wav2vec2-base-960h')
+		parser.add_argument('--audio2emotion_path', default='/home/mli374/float/checkpoints/wav2vec-english-speech-emotion-recognition')
 		parser.add_argument('--attention_window', default=2, type=int, help='attention window size, e.g., if 1, attend frames of t-1, t, t+1 for frame t')
 
 		parser.add_argument('--only_last_features', action='store_true')
@@ -48,7 +48,7 @@ class BaseOptions():
 		parser.add_argument('--no_learned_pe', action='store_true')
 		parser.add_argument('--num_prev_frames', type=int, default=10)
 		parser.add_argument('--max_grad_norm', default=1, type=float, help='max grad norm for training transformers')
-
+		
 		parser.add_argument('--ode_atol', default=1e-5, type=float)
 		parser.add_argument('--ode_rtol', default=1e-5, type=float)
 		parser.add_argument('--nfe', default=10, type=int,
@@ -73,10 +73,24 @@ class BaseOptions():
 		parser.add_argument('--lr', type=float, default=1e-4, help='学习率')
 		parser.add_argument('--num_workers', type=int, default=4, help='DataLoader 工作进程数')
 		parser.add_argument('--mixed_precision', type=str, default='fp16', choices=['no', 'fp16', 'bf16'], help='混合精度')
-		parser.add_argument('--log_step', type=int, default=500)
+		parser.add_argument('--log_step', type=int, default=50)
 		parser.add_argument('--sample_step', type=int, default=2000)
 		parser.add_argument('--save_step', type=int, default=10000)
-		parser.add_argument('--prev_frame_dropout_prob', type=float, default=0.1)
+		parser.add_argument('--prev_frame_dropout_prob', type=float, default=0.5)
+		
+		# 设备相关参数
+		parser.add_argument('--rank', type=str, default='cuda', help='训练设备')
+		
+		# 训练相关参数
+		parser.add_argument('--batch_step', type=int, default=20, help='每个批次的子步骤数')
+		
+		# wandb 相关参数
+		parser.add_argument('--use_wandb', action='store_true', help='是否使用 wandb 进行实验跟踪')
+		parser.add_argument('--wandb_project', type=str, default='float-training', help='wandb 项目名称')
+		parser.add_argument('--wandb_entity', type=str, default=None, help='wandb 实体名称')
+		parser.add_argument('--wandb_run_name', type=str, default=None, help='wandb 运行名称')
+		parser.add_argument('--wandb_tags', type=str, nargs='*', default=[], help='wandb 标签')
+		
 		return parser
 
 

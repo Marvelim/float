@@ -14,6 +14,12 @@ from transformers import Wav2Vec2FeatureExtractor
 from models.float.FLOAT import FLOAT
 from options.base_options import BaseOptions
 
+# 导入工具函数
+from utils.checkpoint_utils import load_weight
+from utils.video_utils import save_generated_video
+from utils.data_utils import get_audio_preprocessor, load_audio
+from utils.image_utils import ImageProcessor
+
 
 class DataProcessor:
 	def __init__(self, opt):
@@ -22,10 +28,15 @@ class DataProcessor:
 		self.sampling_rate = opt.sampling_rate
 		self.input_size = opt.input_size
 
-		self.fa = face_alignment.FaceAlignment(face_alignment.LandmarksType.TWO_D, flip_input=False)
+		# 使用统一的图像处理器
+		self.image_processor = ImageProcessor(
+			input_size=opt.input_size,
+			use_face_alignment=True,
+			device='auto'
+		)
 
 		# wav2vec2 audio preprocessor
-		self.wav2vec_preprocessor = Wav2Vec2FeatureExtractor.from_pretrained(opt.wav2vec_model_path, local_files_only=True)
+		self.wav2vec_preprocessor = get_audio_preprocessor(opt)
 
 		# image transform
 		self.transform = A.Compose([
@@ -36,33 +47,20 @@ class DataProcessor:
 
 	@torch.no_grad()
 	def process_img(self, img:np.ndarray) -> np.ndarray:
-		mult = 360. / img.shape[0]
-
-		resized_img = cv2.resize(img, dsize=(0, 0), fx = mult, fy = mult, interpolation=cv2.INTER_AREA if mult < 1. else cv2.INTER_CUBIC)
-		bboxes = self.fa.face_detector.detect_from_image(resized_img)
-		bboxes = [(int(x1 / mult), int(y1 / mult), int(x2 / mult), int(y2 / mult), score) for (x1, y1, x2, y2, score) in bboxes if score > 0.95]
-		bboxes = bboxes[0] # Just use first bbox
-
-		bsy = int((bboxes[3] - bboxes[1]) / 2)
-		bsx = int((bboxes[2] - bboxes[0]) / 2)
-		my  = int((bboxes[1] + bboxes[3]) / 2)
-		mx  = int((bboxes[0] + bboxes[2]) / 2)
-
-		bs = int(max(bsy, bsx) * 1.6)
-		img = cv2.copyMakeBorder(img, bs, bs, bs, bs, cv2.BORDER_CONSTANT, value=0)
-		my, mx  = my + bs, mx + bs  	# BBox center y, bbox center x
-
-		crop_img = img[my - bs:my + bs,mx - bs:mx + bs]
-		crop_img = cv2.resize(crop_img, dsize = (self.input_size, self.input_size), interpolation = cv2.INTER_AREA if mult < 1. else cv2.INTER_CUBIC)
-		return crop_img
+		# 使用统一的图像处理器
+		return self.image_processor.process_image(img)
 
 	def default_img_loader(self, path) -> np.ndarray:
 		img = cv2.imread(path)
 		return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 	def default_aud_loader(self, path: str) -> torch.Tensor:
-		speech_array, sampling_rate = librosa.load(path, sr = self.sampling_rate)
-		return self.wav2vec_preprocessor(speech_array, sampling_rate = sampling_rate, return_tensors = 'pt').input_values[0]
+		# 使用 utils 中的 load_audio 函数
+		audio_tensor = load_audio(path, self.opt)
+		# 确保形状是 (1, sequence_length)
+		if audio_tensor.dim() == 1:
+			audio_tensor = audio_tensor.unsqueeze(0)
+		return audio_tensor
 
 
 	def preprocess(self, ref_path:str, audio_path:str, no_crop:bool) -> dict:
@@ -74,7 +72,7 @@ class DataProcessor:
 			s = self.process_img(s)
 		print("process_img done")
 		s = self.transform(image=s)['image'].unsqueeze(0)
-		a = self.default_aud_loader(audio_path).unsqueeze(0)
+		a = self.default_aud_loader(audio_path)
 		print("default_aud_loader done")
 		print("preprocess done")
 		return {'s': s, 'a': a, 'p': None, 'e': None}
@@ -99,33 +97,13 @@ class InferenceAgent:
 		self.G = FLOAT(self.opt)
 
 	def load_weight(self, checkpoint_path: str, rank: int) -> None:
-		state_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
-		with torch.no_grad():
-			for model_name, model_param in self.G.named_parameters():
-				if model_name in state_dict:
-					model_param.copy_(state_dict[model_name].to(rank))
-				elif "wav2vec2" in model_name: pass
-				else:
-					print(f"! Warning; {model_name} not found in state_dict.")
-
-		del state_dict
+		# 使用 utils 中的 load_weight 函数
+		load_weight(self.G, checkpoint_path, torch.device(rank))
 
 	def save_video(self, vid_target_recon: torch.Tensor, video_path: str, audio_path: str) -> str:
-		with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_video:
-			temp_filename = temp_video.name
-			vid = vid_target_recon.permute(0, 2, 3, 1)
-			vid = vid.detach().clamp(-1, 1).cpu()
-			vid = ((vid + 1) / 2 * 255).type('torch.ByteTensor')
-			torchvision.io.write_video(temp_filename, vid, fps=self.opt.fps)			
-			if audio_path is not None:
-				with open(os.devnull, 'wb') as f:
-					command =  "ffmpeg -i {} -i {} -c:v copy -c:a aac {} -y".format(temp_filename, audio_path, video_path)
-					subprocess.call(command, shell=True, stdout=f, stderr=f)
-				if os.path.exists(video_path):
-					os.remove(temp_filename)
-			else:
-				os.rename(temp_filename, video_path)
-			return video_path
+		# 使用 utils 中的 save_generated_video 函数
+		save_generated_video(vid_target_recon, video_path, audio_path, self.opt.fps)
+		return video_path
 
 	@torch.no_grad()
 	def run_inference(

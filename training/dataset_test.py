@@ -46,10 +46,14 @@ from typing import Dict, List, Tuple, Any
 import random
 import pickle
 from pathlib import Path
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.float.generator import Generator
 from models.float.FLOAT import AudioEncoder
 from transformers import Wav2Vec2FeatureExtractor
 from tqdm import tqdm
+from options.base_options import BaseOptions
 
 class FLOATDatasetOptimized(Dataset):
     """
@@ -125,13 +129,17 @@ class FLOATDatasetOptimized(Dataset):
         
         # 假设数据结构类似于 RAVDESS 数据集
         if self.train:
-            data_dir = self.data_root / "ravdess_processed" / "train"
+            data_dir = self.data_root / "train"
         else:
-            data_dir = self.data_root / "ravdess_processed" / "test"
+            data_dir = self.data_root / "test"
+        
+        print(f"Looking for data in: {data_dir}")
+        print(f"Data directory exists: {data_dir.exists()}")
         
         if not data_dir.exists():
             # 如果没有预处理数据，使用原始数据
             data_dir = self.data_root / "ravdess_raw"
+            print(f"Fallback to raw data: {data_dir}")
         
         # 遍历所有演员文件夹
         for actor_dir in data_dir.glob("Actor_*"):
@@ -139,7 +147,7 @@ class FLOATDatasetOptimized(Dataset):
                 continue
                 
             # 遍历每个演员的文件
-            for video_file in actor_dir.glob("*.mp4"):
+            for video_file in actor_dir.glob("*_processed.mp4"):
                 # 解析文件名获取情感信息
                 parts = video_file.stem.split('-')
                 if len(parts) >= 3:
@@ -151,10 +159,12 @@ class FLOATDatasetOptimized(Dataset):
                     emotion = 4
                 
                 # 查找对应的音频文件
-                audio_file = video_file.with_suffix('.wav')
+                # 将 _processed.mp4 替换为 _processed.wav
+                audio_file = video_file.with_name(video_file.stem.replace('_processed', '_processed') + '.wav')
                 if not audio_file.exists():
+                    # 尝试其他可能的音频文件扩展名
                     for ext in ['.wav', '.mp3', '.flac']:
-                        audio_file = video_file.with_suffix(ext)
+                        audio_file = video_file.with_name(video_file.stem.replace('_processed', '_processed') + ext)
                         if audio_file.exists():
                             break
                 
@@ -176,6 +186,13 @@ class FLOATDatasetOptimized(Dataset):
             预处理后的数据列表
         """
         # 设置设备
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"CUDA device count: {torch.cuda.device_count()}")
+            print(f"Current CUDA device: {torch.cuda.current_device()}")
+            for i in range(torch.cuda.device_count()):
+                print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+        
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f"Using device for preprocessing: {device}")
 
@@ -187,11 +204,30 @@ class FLOATDatasetOptimized(Dataset):
             motion_dim=self.opt.dim_m
         ).to(device)  # 移动到CUDA
 
+        # 修复路径问题
+        wav2vec_model_path = self.opt.wav2vec_model_path
+        if not os.path.exists(wav2vec_model_path):
+            # 尝试相对路径
+            wav2vec_model_path = f"../{self.opt.wav2vec_model_path}"
+        if not os.path.exists(wav2vec_model_path):
+            # 尝试绝对路径
+            wav2vec_model_path = f"/home/mli374/float/{self.opt.wav2vec_model_path}"
+        
+        print(f"Using wav2vec model path: {wav2vec_model_path}")
+        
+        # 临时修改opt中的路径
+        original_path = self.opt.wav2vec_model_path
+        self.opt.wav2vec_model_path = wav2vec_model_path
+        
         audio_encoder = AudioEncoder(self.opt).to(device)  # 移动到CUDA
+        
         wav2vec_preprocessor = Wav2Vec2FeatureExtractor.from_pretrained(
-            self.opt.wav2vec_model_path,
+            wav2vec_model_path,
             local_files_only=True
         )
+        
+        # 恢复原始路径
+        self.opt.wav2vec_model_path = original_path
 
         # 加载预训练权重到 motion_autoencoder
         print("Loading motion_autoencoder weights from float.pth...")
@@ -220,6 +256,9 @@ class FLOATDatasetOptimized(Dataset):
         raw_data_list = self._load_data_list()
         preprocessed_data = []
 
+        print(f"Found {len(raw_data_list)} raw data samples")
+        if len(raw_data_list) > 0:
+            print(f"First sample: {raw_data_list[0]}")
         print(f"Preprocessing {len(raw_data_list)} samples...")
 
         # 启用CUDA优化
@@ -540,3 +579,26 @@ def check_cache_status(data_root: str, cache_dir: str = None):
     if test_cache.exists():
         size_mb = test_cache.stat().st_size / (1024 * 1024)
         print(f"Test cache size: {size_mb:.2f} MB")
+
+if __name__ == "__main__":
+    # 创建并解析选项
+    opt = BaseOptions().parse()
+    
+    dataset = FLOATDatasetOptimized(
+        data_root="../datasets/ravdess_processed",
+        train=True,
+        opt=opt,
+        cache_dir="../datasets/ravdess_processed/cache",
+        force_preprocess=True
+    )
+    print(f"Dataset size: {len(dataset)}")
+
+    dataloader = create_dataloader_optimized(
+        data_root="../datasets/ravdess_processed",
+        train=True,
+        opt=opt,
+        cache_dir="../datasets/ravdess_processed/cache",
+        force_preprocess=True
+    )
+    batch_data = next(iter(dataloader))
+    print(batch_data)

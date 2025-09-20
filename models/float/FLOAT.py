@@ -166,13 +166,16 @@ class FLOAT(BaseModel):
 		else:
 			r_s = self.motion_autoencoder.dec.direction(r_s_lambda)
 		data['r_s'] = r_s
-
+		
 		# set conditions
 		if a_cfg_scale is None: a_cfg_scale = self.opt.a_cfg_scale
 		if r_cfg_scale is None: r_cfg_scale = self.opt.r_cfg_scale
 		if e_cfg_scale is None: e_cfg_scale = self.opt.e_cfg_scale
 
 		sample = self.sample(data, a_cfg_scale = a_cfg_scale, r_cfg_scale = r_cfg_scale, e_cfg_scale = e_cfg_scale, emo = emo, nfe = nfe, seed = seed)
+		print("SAMPLE:", sample.shape)
+		# fake_sample = r_s.repeat(1, sample.shape[1], 1)
+		# sample = torch.zeros_like(sample)
 		data_out = self.decode_latent_into_image(s_r = s_r, s_r_feats = s_r_feats, r_d = sample)
 		return data_out
 

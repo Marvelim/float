@@ -10,8 +10,9 @@ RAW_DIR="${RAW_DIR:-$PROJECT_ROOT/ravdess_raw}"
 PROCESSED_DIR="${PROCESSED_DIR:-$PROJECT_ROOT/ravdess_processed}"
 
 # Default preprocessing options
-ACTORS="${ACTORS:-1}"
+ACTORS="${ACTORS:-2-24}"
 MODALITIES="${MODALITIES:-speech}"
+PREPROCESS_WORKERS="${PREPROCESS_WORKERS:-4}"
 
 # Avoid face-alignment stalls by default; allow override via NO_FACE=0
 NO_FACE_FLAG="--no_face"
@@ -34,6 +35,7 @@ python "$SCRIPT_DIR/download_and_preprocess_ravdess.py" \
   --modalities "$MODALITIES" \
   --raw_dir "$RAW_DIR" \
   --processed_dir "$PROCESSED_DIR" \
+  --preprocess_workers "$PREPROCESS_WORKERS" \
   $NO_FACE_FLAG \
   --fa_init_timeout "$FA_TIMEOUT" \
   "$@"

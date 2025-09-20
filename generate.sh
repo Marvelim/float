@@ -1,6 +1,6 @@
-CUDA_VISIBLE_DEVICES=4 python generate.py \
+CUDA_VISIBLE_DEVICES=0 python generate.py \
     --ref_path assets/sam_altman.webp \
-    --aud_path assets/aud-sample-vs-1.wav \
+    --aud_path assets/audio.wav \
     --seed  15 \
     --a_cfg_scale 2 \
     --e_cfg_scale 1 \

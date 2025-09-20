@@ -293,7 +293,6 @@ class FlowMatchingTransformer(BaseModel):
 		if prev_x is not None:
 			prev_x  = self.sequence_embedder(prev_x,  dropout_prob=0.5, train=train)
 			prev_wa = self.sequence_embedder(prev_wa, dropout_prob=0.5, train=train)
-			
 			x = torch.cat([prev_x, x], dim=1)	
 			wa = torch.cat([prev_wa, wa], dim=1)
 		

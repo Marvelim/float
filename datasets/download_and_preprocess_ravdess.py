@@ -29,6 +29,7 @@ sys.path.append('..')
 try:
     from options.base_options import BaseOptions
     from generate import DataProcessor
+    from utils.image_utils import ImageProcessor
 except ImportError:
     print("Warning: Could not import project modules. Some features may be unavailable.")
 
@@ -408,135 +409,23 @@ class RAVDESSPreprocessor:
         self.target_sr = target_sr
         self.target_size = target_size
         
-        # 初始化人脸检测器（可禁用，并带超时避免卡死）
-        self.fa = None
-        if use_face_alignment:
-            try:
-                import threading
-                _fa_holder = {}
-                def _init_fa():
-                    try:
-                        # 使用GPU 4-7中的第一个可用GPU
-                        import torch
-                        if torch.cuda.is_available() and torch.cuda.device_count() > 4:
-                            device = 'cuda:4'  # 使用GPU 4
-                        else:
-                            device = 'cpu'
-                        _fa_holder['fa'] = face_alignment.FaceAlignment(
-                            face_alignment.LandmarksType.TWO_D,
-                            flip_input=False,
-                            device=device
-                        )
-                    except Exception as ie:
-                        _fa_holder['err'] = ie
-                t = threading.Thread(target=_init_fa, daemon=True)
-                t.start()
-                t.join(timeout=max(1, int(fa_init_timeout)))
-                if t.is_alive():
-                    print("Warning: face_alignment init timeout, fallback to center crop.")
-                else:
-                    if 'err' in _fa_holder:
-                        print(f"Warning: Could not initialize face alignment: {_fa_holder['err']}")
-                    else:
-                        self.fa = _fa_holder.get('fa')
-            except Exception as e:
-                print(f"Warning: face_alignment setup failed: {e}")
-                self.fa = None
+        # 使用统一的图像处理器
+        self.image_processor = ImageProcessor(
+            input_size=target_size,
+            use_face_alignment=use_face_alignment,
+            fa_init_timeout=fa_init_timeout,
+            device='auto'
+        )
     
     def get_crop_params_like_generate(self, img):
         """按照generate.py中process_img的方式计算裁剪参数"""
-        if self.fa is None:
-            # 如果没有人脸检测器，返回中心区域裁剪参数
-            h, w = img.shape[:2]
-            size = min(h, w)
-            y = (h - size) // 2
-            x = (w - size) // 2
-            return {
-                'type': 'center',
-                'y': y, 'x': x, 'size': size,
-                'bs': 0, 'my': 0, 'mx': 0
-            }
-        
-        try:
-            # 缩放图像以提高检测速度（与generate.py完全一致）
-            mult = 360. / img.shape[0]
-            resized_img = cv2.resize(img, dsize=(0, 0), fx=mult, fy=mult, 
-                                   interpolation=cv2.INTER_AREA if mult < 1. else cv2.INTER_CUBIC)
-            
-            # 检测人脸
-            bboxes = self.fa.face_detector.detect_from_image(resized_img)
-            # 过滤置信度大于0.95的检测结果（与generate.py一致）
-            bboxes = [(int(x1 / mult), int(y1 / mult), int(x2 / mult), int(y2 / mult), score) 
-                     for (x1, y1, x2, y2, score) in bboxes if score > 0.95]
-            
-            if len(bboxes) == 0:
-                # 没有检测到高置信度人脸，返回中心区域裁剪参数
-                h, w = img.shape[:2]
-                size = min(h, w)
-                y = (h - size) // 2
-                x = (w - size) // 2
-                return {
-                    'type': 'center',
-                    'y': y, 'x': x, 'size': size,
-                    'bs': 0, 'my': 0, 'mx': 0
-                }
-            
-            # 使用第一个检测到的人脸（与generate.py一致）
-            bboxes = bboxes[0]
-            
-            # 计算人脸中心和半尺寸（与generate.py完全一致）
-            bsy = int((bboxes[3] - bboxes[1]) / 2)
-            bsx = int((bboxes[2] - bboxes[0]) / 2)
-            my = int((bboxes[1] + bboxes[3]) / 2)
-            mx = int((bboxes[0] + bboxes[2]) / 2)
-            
-            # 计算扩展尺寸（与generate.py完全一致）
-            bs = int(max(bsy, bsx) * 1.6)
-            
-            return {
-                'type': 'face',
-                'bs': bs, 'my': my, 'mx': mx,
-                'mult': mult
-            }
-            
-        except Exception as e:
-            print(f"人脸检测失败: {e}")
-            # 返回中心区域裁剪参数
-            h, w = img.shape[:2]
-            size = min(h, w)
-            y = (h - size) // 2
-            x = (w - size) // 2
-            return {
-                'type': 'center',
-                'y': y, 'x': x, 'size': size,
-                'bs': 0, 'my': 0, 'mx': 0
-            }
+        # 使用统一的图像处理器
+        return self.image_processor.get_crop_params(img)
     
     def apply_crop_params(self, img, crop_params):
         """根据裁剪参数处理图像"""
-        if crop_params['type'] == 'center':
-            # 中心裁剪
-            y, x, size = crop_params['y'], crop_params['x'], crop_params['size']
-            crop_img = img[y:y+size, x:x+size]
-            return cv2.resize(crop_img, (self.target_size, self.target_size))
-        
-        elif crop_params['type'] == 'face':
-            # 人脸裁剪（与generate.py完全一致）
-            bs, my, mx = crop_params['bs'], crop_params['my'], crop_params['mx']
-            mult = crop_params['mult']
-            
-            # 添加边框（与generate.py完全一致）
-            img = cv2.copyMakeBorder(img, bs, bs, bs, bs, cv2.BORDER_CONSTANT, value=0)
-            my, mx = my + bs, mx + bs  # 更新中心坐标
-            
-            # 裁剪正方形区域（与generate.py完全一致）
-            crop_img = img[my - bs:my + bs, mx - bs:mx + bs]
-            
-            # 调整到目标尺寸（与generate.py完全一致）
-            crop_img = cv2.resize(crop_img, dsize=(self.target_size, self.target_size), 
-                                interpolation=cv2.INTER_AREA if mult < 1. else cv2.INTER_CUBIC)
-            
-            return crop_img
+        # 使用统一的图像处理器
+        return self.image_processor.apply_crop_params(img, crop_params)
     
     
     
@@ -684,7 +573,49 @@ class RAVDESSPreprocessor:
             print(f"合并失败: {e}")
             return False
             
-    def preprocess_dataset(self, actor_ids=None, modalities=None):
+    def process_single_video(self, video_file, actor_id, modalities):
+        """处理单个视频文件的辅助方法，用于并行处理"""
+        try:
+            # 检查是否是目标模态
+            filename = video_file.name
+            is_speech = filename.startswith("01-01")  # Speech modality
+            is_song = filename.startswith("01-02")    # Song modality
+            
+            should_process = False
+            if 'speech' in modalities and is_speech:
+                should_process = True
+            elif 'song' in modalities and is_song:
+                should_process = True
+            
+            if not should_process:
+                return False, "跳过非目标模态"
+            
+            # 设置输出路径
+            output_dir = self.processed_dir / f"Actor_{actor_id:02d}"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_video_path = output_dir / f"{video_file.stem}_processed.mp4"
+            
+            # 检查是否已处理
+            if output_video_path.exists():
+                return True, "已存在，跳过"
+            
+            # 查找匹配的高质量音频文件
+            audio_file = self.find_matching_audio(video_file)
+            
+            if audio_file:
+                # 使用高质量音频处理
+                success = self.process_video_with_separate_audio(video_file, audio_file, output_video_path)
+                if success:
+                    return True, "处理成功"
+                else:
+                    return False, "处理失败"
+            else:
+                return False, "未找到匹配的音频文件"
+                
+        except Exception as e:
+            return False, f"处理异常: {str(e)}"
+
+    def preprocess_dataset(self, actor_ids=None, modalities=None, max_workers=4):
         """预处理整个数据集"""
         if actor_ids is None:
             actor_ids = list(range(1, 25))  # Actor 01-24
@@ -698,11 +629,14 @@ class RAVDESSPreprocessor:
         print(f"目标FPS: {self.target_fps}")
         print(f"目标采样率: {self.target_sr} Hz")
         print(f"目标分辨率: {self.target_size}x{self.target_size}")
+        print(f"并行工作线程数: {max_workers}")
         print("=" * 60)
         
         total_processed = 0
         total_failed = 0
         
+        # 收集所有需要处理的视频文件
+        all_video_tasks = []
         for actor_id in actor_ids:
             actor_dir = self.raw_dir / f"Actor_{actor_id:02d}"
             
@@ -710,49 +644,37 @@ class RAVDESSPreprocessor:
                 print(f"⚠️  Actor_{actor_id:02d} 目录不存在，跳过")
                 continue
             
-            print(f"\n处理 Actor_{actor_id:02d}...")
+            print(f"\n收集 Actor_{actor_id:02d} 的视频文件...")
             
-            # 处理视频文件
+            # 收集视频文件
             video_files = list(actor_dir.glob("*.mp4"))
+            for video_file in video_files:
+                all_video_tasks.append((video_file, actor_id, modalities))
+        
+        print(f"\n总共找到 {len(all_video_tasks)} 个视频文件需要处理")
+        
+        # 使用线程池并行处理
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_task = {
+                executor.submit(self.process_single_video, video_file, actor_id, modalities): (video_file, actor_id)
+                for video_file, actor_id, modalities in all_video_tasks
+            }
             
-            for video_file in tqdm(video_files, desc=f"Actor_{actor_id:02d}"):
-                # 检查是否是目标模态
-                filename = video_file.name
-                is_speech = filename.startswith("01-01")  # Speech modality
-                is_song = filename.startswith("01-02")    # Song modality
-                
-                should_process = False
-                if 'speech' in modalities and is_speech:
-                    should_process = True
-                elif 'song' in modalities and is_song:
-                    should_process = True
-                
-                if not should_process:
-                    continue
-                
-                # 设置输出路径
-                output_dir = self.processed_dir / f"Actor_{actor_id:02d}"
-                output_video_path = output_dir / f"{video_file.stem}_processed.mp4"
-                
-                # 检查是否已处理
-                if output_video_path.exists():
-                    continue
-                
-                # 查找匹配的高质量音频文件
-                audio_file = self.find_matching_audio(video_file)
-                
-                if audio_file:
-                    # 使用高质量音频处理
-                    success = self.process_video_with_separate_audio(video_file, audio_file, output_video_path)
-                else:
-                    # 跳过没有匹配音频文件的视频
-                    print(f"⚠️  未找到匹配的音频文件，跳过: {video_file.name}")
-                    continue
-                
-                if success:
-                    total_processed += 1
-                else:
+            # 处理完成的任务
+            for future in tqdm(as_completed(future_to_task), total=len(future_to_task), desc="处理视频"):
+                video_file, actor_id = future_to_task[future]
+                try:
+                    success, message = future.result()
+                    if success:
+                        total_processed += 1
+                    else:
+                        total_failed += 1
+                        if "跳过" not in message:  # 只显示真正的错误
+                            print(f"❌ {video_file.name}: {message}")
+                except Exception as e:
                     total_failed += 1
+                    print(f"❌ {video_file.name}: 处理异常 - {str(e)}")
         
         print(f"\n预处理完成!")
         print(f"成功处理: {total_processed} 个文件")
@@ -778,16 +700,33 @@ def main():
     parser.add_argument('--raw_dir', type=str, default='./ravdess_raw', help='原始数据目录')
     parser.add_argument('--processed_dir', type=str, default='./ravdess_processed', help='处理后数据目录')
     parser.add_argument('--num_workers', type=int, default=1, help='下载并行线程数（建议 2-8）')
+    parser.add_argument('--preprocess_workers', type=int, default=4, help='预处理并行线程数（建议 2-8）')
     parser.add_argument('--no_face', action='store_true', help='预处理时禁用人脸检测，使用中心裁剪（避免卡住）')
     parser.add_argument('--fa_init_timeout', type=int, default=10, help='人脸检测初始化超时（秒），超过则回退中心裁剪')
     
     args = parser.parse_args()
     
+    # 解析actor IDs的辅助函数
+    def parse_actor_ids(actors_str):
+        """解析actor IDs字符串，支持范围格式(如2-24)和逗号分隔格式(如1,3,5)"""
+        if actors_str.lower() == 'all':
+            return list(range(1, 25))
+        
+        actor_ids = []
+        for part in actors_str.split(','):
+            part = part.strip()
+            if '-' in part:
+                # 处理范围格式，如 "2-24"
+                start, end = map(int, part.split('-'))
+                actor_ids.extend(range(start, end + 1))
+            else:
+                # 处理单个ID
+                actor_ids.append(int(part))
+        
+        return sorted(list(set(actor_ids)))  # 去重并排序
+    
     # 解析actor IDs
-    if args.actors.lower() == 'all':
-        actor_ids = list(range(1, 25))
-    else:
-        actor_ids = [int(x.strip()) for x in args.actors.split(',')]
+    actor_ids = parse_actor_ids(args.actors)
     
     # 解析modalities
     if args.modalities == 'both':
@@ -837,7 +776,7 @@ def main():
         preprocessor = RAVDESSPreprocessor(args.raw_dir, args.processed_dir,
                                            use_face_alignment=(not args.no_face),
                                            fa_init_timeout=args.fa_init_timeout)
-        success_count, failed_count = preprocessor.preprocess_dataset(actor_ids, modalities)
+        success_count, failed_count = preprocessor.preprocess_dataset(actor_ids, modalities, args.preprocess_workers)
         
         if failed_count == 0:
             print("✅ 所有文件预处理完成")
